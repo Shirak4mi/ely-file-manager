@@ -13,10 +13,9 @@ import {
 import { Elysia } from "elysia";
 import { prisma } from "@/db";
 
-export default new Elysia().post(
+export default new Elysia().decorate("apiKey", "" as string).post(
   "upload",
-  // TS-ignore error
-  async ({ body: { path, file }, apiKey, request: req, server, set }: any) => {
+  async ({ body: { path, file }, apiKey, request: req, server, set }) => {
     try {
       const workingFP = await createFilePathIfDoesntExists(path);
       const createdFile = await createFileOnsFS(workingFP, file);
@@ -48,6 +47,9 @@ export default new Elysia().post(
         select: { path: true, name: true, extension: true, size: true },
       });
 
+      const requestedToken =
+        req.headers.get("authorization") !== null ? (req.headers.get("authorization") ?? " ").split(" ")[1] : "N/A";
+
       logger("INFO", "File Upload", {
         requestedBy,
         requestIpFrom: convertIPv6ToIPv4(server ? server.requestIP.toString() : "N/A"),
@@ -63,9 +65,9 @@ export default new Elysia().post(
             name: file.name,
           },
         },
+        requestedToken,
         requestStatus: 200,
         requestAt: new Date(),
-        requestedToken: req.headers.get("authorization") ? req.headers.get("authorization").split(" ")[1] : "N/A",
         response: { message: ["File retrieved successfully"], statusCode: 200 },
       });
     } catch (err) {

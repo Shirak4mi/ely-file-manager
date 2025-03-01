@@ -1,13 +1,13 @@
 import { UnauthorizedException } from "@/utils/error";
-import { jwt_exp, jwt_secret } from "@/utils/env";
+import { logger } from "@/utils/functions";
 import { loginUserDTO } from "../dto";
-import { jwt } from "@elysiajs/jwt";
 import { prisma } from "@/db";
 
 import { Elysia } from "elysia";
-import { logger } from "@/utils/functions";
 
-export default new Elysia().use(jwt({ name: "jwt", secret: jwt_secret, exp: jwt_exp ?? "365d" })).post(
+import type { JWTOption } from "@elysiajs/jwt";
+
+export default new Elysia().decorate("jwt", {} as { sign: Function }).post(
   "Login",
   async ({ body: { email, password }, jwt: { sign } }) => {
     try {

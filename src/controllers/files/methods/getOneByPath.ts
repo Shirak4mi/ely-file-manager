@@ -5,9 +5,9 @@ import { prisma } from "@/db";
 
 import { Elysia, file } from "elysia";
 
-export default new Elysia().get(
+export default new Elysia().decorate("apiKey", "" as string).get(
   "get-one-by-path/:path",
-  async ({ params: { path }, query: { inline }, set, server, request: req, apiKey }: any) => {
+  async ({ params: { path }, query: { inline }, set, server, request: req, apiKey }) => {
     try {
       const validFilePath = await getWorkingFilePath(decodeURIComponent(path));
       const actualFile = bFile(validFilePath ?? "");
@@ -20,6 +20,9 @@ export default new Elysia().get(
       set.headers["Content-Type"] = contentType;
 
       const requestedBy = await prisma.users.findFirst({ where: { apiKey }, select: { id: true, name: true, email: true } });
+
+      const requestedToken =
+        req.headers.get("authorization") !== null ? (req.headers.get("authorization") ?? " ").split(" ")[1] : "N/A";
 
       logger("INFO", "GET ONE FILE BY ID", {
         requestedBy,
@@ -36,9 +39,9 @@ export default new Elysia().get(
             name: actualFile.name,
           },
         },
+        requestedToken,
         requestStatus: 200,
         requestAt: new Date(),
-        requestedToken: req.headers.get("authorization") ? req.headers.get("authorization").split(" ")[1] : "N/A",
         response: { message: ["File retrieved successfully"], statusCode: 200 },
       });
 
