@@ -407,9 +407,8 @@ export function extractAndSanitizeFileName(filepath: string): string {
   let start = len - 1;
 
   // Find last separator (/ or \) in one reverse pass
-  while (start >= 0 && filepath[start] !== "/" && filepath[start] !== "\\") {
-    start--;
-  }
+  while (start >= 0 && filepath[start] !== "/" && filepath[start] !== "\\") start--;
+
   start++; // Move to start of file name
 
   // Single-pass sanitize from start to end
@@ -437,9 +436,7 @@ export function extractAndSanitizePath(filepath: string): string {
   let end = len - 1;
 
   // Find last separator (/ or \) in one reverse pass
-  while (end >= 0 && filepath[end] !== "/" && filepath[end] !== "\\") {
-    end--;
-  }
+  while (end >= 0 && filepath[end] !== "/" && filepath[end] !== "\\") end--;
 
   if (end < 0) return ""; // No separators, return empty string
 
