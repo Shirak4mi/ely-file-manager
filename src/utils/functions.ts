@@ -311,7 +311,7 @@ export async function createFileOnsFS(workingFP?: string, files?: File | Array<F
  * @throws {NotFoundException} If path is missing, thrown immediately
  */
 export async function createFileOnsFSEmpty(workingFP?: string): Promise<number> {
-  if (!workingFP) throw new NotFoundException("Path not found"); 
+  if (!workingFP) throw new NotFoundException("Path not found");
   return Bun.write(workingFP, ""); // Fastest async write, ~10-20µs
 }
 
@@ -365,12 +365,8 @@ export function generateToken(): string {
  * const salt = generateRandomSalt();
  * const hashedPassword = await encryptPassword(salt, "mySecurePassword");
  */
-export function encryptPassword(
-  salt: string,
-  pass: string,
-  options: PasswordHashOptions = { algorithm: "argon2id", memoryCost: 65536, timeCost: 3 }
-): Promise<string> {
-  return password.hash(salt + pass, options);
+export function encryptPassword(salt: string, pass: string): Promise<string> {
+  return password.hash(salt + pass, { algorithm: "argon2id" });
 }
 
 export { default as generateNanoID } from "./nanoID/index.ts";

@@ -10,14 +10,16 @@ export default new Elysia().decorate("jwt", {} as { sign: Function }).post(
   async ({ body: { email, password }, jwt: { sign } }) => {
     try {
       const isValidUser = await prisma.users.findFirst({
-        select: { api_key: true, id: true, password: true },
+        select: { api_key: true, id: true, password: true, password_salt: true },
         where: { email },
       });
 
       if (!isValidUser) throw new UnauthorizedException("Invalid Credentials");
-      const { id: _id = "", api_key = "", password: uPword } = isValidUser;
+      const { id: _id = "", api_key = "", password: uPword, password_salt: pwsalt } = isValidUser;
 
-      const isValidPassword = await Bun.password.verify(password, uPword, "bcrypt");
+      console.log({ pwsalt, uPword, password, unh: await Bun.password.verify(password, pwsalt + uPword, "argon2id") });
+
+      const isValidPassword = await Bun.password.verify(password, pwsalt + uPword, "argon2id");
 
       if (!isValidPassword) throw new UnauthorizedException("Invalid Credentials");
 
