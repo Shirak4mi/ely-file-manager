@@ -19,18 +19,19 @@ async function main() {
     skipDuplicates: true,
   });
 
+  const plain_password = "SadMaintenanceAccountÑÑÑ!!!@@";
   const password_salt = generateRandomSalt();
 
   const maintenance_app_user = await prisma.users.create({
     data: {
       password: await encryptPassword(password_salt, "SadMaintenanceAccountÑÑÑ!!!@@"),
-      plain_password: "SadMaintenanceAccountÑÑÑ!!!@@",
       username: "SAD Maintenance User",
       email: "sad.maintenance@sad.com",
       Status: { connect: { id: 1 } },
       Type: { connect: { id: 3 } },
       api_key: generateNanoID(30),
       updated_at: null,
+      plain_password,
       password_salt,
     },
   });

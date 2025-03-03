@@ -366,6 +366,7 @@ export function generateToken(): string {
  * const hashedPassword = await encryptPassword(salt, "mySecurePassword");
  */
 export function encryptPassword(salt: string, pass: string): Promise<string> {
+  console.log({ salt, pass });
   return password.hash(salt + pass, { algorithm: "argon2id" });
 }
 
