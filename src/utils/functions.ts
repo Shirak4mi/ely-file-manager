@@ -1,7 +1,8 @@
+import { alphabet, generateRandomString } from "oslo/crypto";
 import { NotFoundException } from "./error/index.ts";
 import { mkdir, readdir } from "node:fs/promises";
 import { file_path } from "./env.ts";
-import { file } from "bun";
+import { file, password } from "bun";
 
 export { default as generateNanoID } from "./nanoID/index.ts";
 export { default as HyperScalePathResolver } from "./HyperCache/index.ts";
@@ -209,4 +210,16 @@ export async function createFileOnsFSEmpty(workingFP?: string): Promise<number |
 export function getFileExtension(filename: string): string {
   const ext = (filename.split(".").pop() ?? "").toLowerCase() || "";
   return ext ? `.${ext}` : "";
+}
+
+export function generateRandomSalt(): string {
+  return generateRandomString(16, alphabet("a-z", "A-Z", "0-9"));
+}
+
+export function generateToken(): string {
+  return generateRandomString(12, alphabet("a-z", "A-Z", "0-9"));
+}
+
+export async function encryptPassword(salt: string, pass: string): Promise<string> {
+  return await password.hash(salt + pass, { algorithm: "argon2d" });
 }
