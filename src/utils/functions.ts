@@ -3,6 +3,7 @@ import { mkdir, readdir } from "node:fs/promises";
 import { file_path } from "./env.ts";
 import { file } from "bun";
 
+export { default as generateNanoID } from "./nanoID/index.ts";
 export * from "./logger/index.ts";
 export * from "./ip/index.ts";
 
@@ -83,5 +84,3 @@ export function getFileExtension(filename: string): string {
   const ext = (filename.split(".").pop() ?? "").toLowerCase() || "";
   return ext ? `.${ext}` : "";
 }
-
-

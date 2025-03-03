@@ -8,35 +8,35 @@ datasource db {
 }
 
 model Users {
-     id               Int         @id @default(autoincrement()) @db.Integer
-     username         String      @unique @db.VarChar(255)
-     email            String      @unique @db.VarChar(255)
-     password         String      @db.VarChar(255)
-     password_salt    String      @db.VarChar(255)
-     plain_password   String      @db.VarChar(255)
-     uploaded_by_path Boolean     @default(false) @db.Boolean
-     api_key          String      @unique @db.VarChar(255)
-     type_id          Int         @db.SmallInt
-     status_id        Int         @db.SmallInt
-     created_at       DateTime    @default(now()) @db.Timestamptz()
-     updated_at       DateTime?   @updatedAt @db.Timestamptz()
-     Status           User_status @relation(fields: [status_id], references: [id])
-     Type             User_type   @relation(fields: [type_id], references: [id])
-     Files            Metadata[]
+     id             Int         @id @default(autoincrement()) @db.Integer
+     username       String      @unique @db.VarChar(255)
+     email          String      @unique @db.VarChar(255)
+     password       String      @db.VarChar(255)
+     password_salt  String      @db.VarChar(255)
+     plain_password String      @db.VarChar(255)
+     api_key        String      @unique @db.VarChar(255)
+     type_id        Int         @db.SmallInt
+     status_id      Int         @db.SmallInt
+     created_at     DateTime    @default(now()) @db.Timestamptz()
+     updated_at     DateTime?   @updatedAt @db.Timestamptz()
+     Status         User_status @relation(fields: [status_id], references: [id])
+     Type           User_type   @relation(fields: [type_id], references: [id])
+     Files          Metadata[]
 }
 
 model Metadata {
-     id              String      @id @default(uuid()) @db.VarChar(255)
-     file_name       String      @db.Text
-     file_mime       String      @db.VarChar(60)
-     file_path       String      @db.Text
-     file_size       Int         @db.Integer
-     related_api_key String      @db.VarChar(255)
-     status_id       Int         @db.SmallInt
-     created_at      DateTime    @default(now()) @db.Timestamptz()
-     updated_at      DateTime?   @updatedAt @db.Timestamptz()
-     User            Users       @relation(fields: [related_api_key], references: [api_key])
-     Status          File_status @relation(fields: [status_id], references: [id])
+     id               String      @id @default(uuid()) @db.VarChar(255)
+     file_name        String      @db.Text
+     file_mime        String      @db.VarChar(60)
+     file_path        String      @db.Text
+     file_size        Int         @db.Integer
+     related_api_key  String      @db.VarChar(255)
+     uploaded_by_path Boolean     @default(false) @db.Boolean
+     status_id        Int         @db.SmallInt
+     created_at       DateTime    @default(now()) @db.Timestamptz()
+     updated_at       DateTime?   @updatedAt @db.Timestamptz()
+     User             Users       @relation(fields: [related_api_key], references: [api_key])
+     Status           File_status @relation(fields: [status_id], references: [id])
 }
 
 // Regulatory Fields 

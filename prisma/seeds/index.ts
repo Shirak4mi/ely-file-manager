@@ -1,3 +1,4 @@
+import { generateNanoID } from "@/utils/functions.ts";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -18,7 +19,20 @@ async function main() {
     skipDuplicates: true,
   });
 
-  console.log({ user_status, user_type, file_status });
+  // const maintenance_app_user = await prisma.users.create({
+  //   data: {
+  //     api_key: generateNanoID(30),
+  //     Type: { connect: { id: 3 } },
+  //     Status: { connect: { id: 1 } },
+  //     username: "SAD Maintenance User",
+  //     email: "sad.maintenance@gruporead<noreply>.com",
+  //     plain_password: "SadMaintenanceAccountÑÑÑ!!!@@",
+  //     // password,
+  //     // password_salt,
+  //   },
+  // });
+
+  console.log({ user_status, user_type, file_status /* maintenance_app_user */ });
 }
 
 (async () => {
