@@ -24,7 +24,7 @@ async function main() {
 
   const maintenance_app_user = await prisma.users.create({
     data: {
-      password: await encryptPassword(password_salt + "SadMaintenanceAccountÑÑÑ!!!@@"),
+      password: await encryptPassword(password_salt, plain_password),
       username: "SAD Maintenance User",
       email: "sad.maintenance@sad.com",
       Status: { connect: { id: 1 } },

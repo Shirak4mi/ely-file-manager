@@ -362,8 +362,13 @@ export function generateToken(): string {
  * const salt = generateRandomSalt();
  * const hashedPassword = await encryptPassword(salt, "mySecurePassword");
  */
-export function encryptPassword(pass: string): Promise<string> {
-  return Bun.password.hash(pass, { algorithm: "argon2d" });
+export async function encryptPassword(salt: string, pass: string): Promise<string> {
+  const encrypt = await Bun.password.hash(salt + pass, { algorithm: "argon2d" });
+  const trys = await Bun.password.verify(salt + pass, encrypt, "argon2d");
+
+  console.log({ encrypt, trys });
+
+  return encrypt;
 }
 
 export { default as HyperScalePathResolver } from "./HyperCache/index.ts";
