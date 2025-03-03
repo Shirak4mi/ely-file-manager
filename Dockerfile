@@ -1,30 +1,39 @@
-# Build stage
-FROM oven/bun:canary-alpine AS builder
+FROM oven/bun:1.1.24-slim as builder
 
 WORKDIR /app
 
-# Copy project files
-COPY package.json bun.lockb* ./
-COPY src ./src
-COPY prisma ./prisma
+# Copy package files
+COPY package.json ./
+COPY bun.lock ./
 
 # Install dependencies
-RUN bun install
+RUN bun install --frozen-lockfile
 
-# Generate Prisma client (relies on schema.prisma binaryTargets)
+# Copy project files
+COPY . .
+
+# Generate Prisma client
 RUN bunx prisma generate
 
-
-# Runtime stage
-FROM oven/bun:canary-alpine
+# Production stage
+FROM oven/bun:1.1.24-slim
 
 WORKDIR /app
 
-# Copy all files, including the query engine
-COPY --from=builder /app /app
+# Copy only necessary files from builder stage
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
-# Expose port
+# Create necessary directories
+RUN mkdir -p /app/uploads /app/metadata /app/files_to_manage
+
+# Create entrypoint script
+RUN echo '#!/bin/sh\nbunx prisma migrate dev reset --force\nbunx prisma db seed\nexec bun dev' > /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
+
 EXPOSE 3000
 
-# Run the app
-CMD ["bux", "prisma", "generate", "&& ","bun", "run", "src/index.ts"]
+ENTRYPOINT ["/app/entrypoint.sh"]

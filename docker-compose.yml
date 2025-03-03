@@ -1,36 +1,58 @@
+version: "3.8"
+
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: ely-file-manager-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin1234
+      - POSTGRES_DB=FileManagement
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
+    image: ely-file-manager
+    container_name: ely-file-manager
+    restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
-      - ./:/app
-      - /opt/storage:/opt/storage
-    env_file:
-      - .env
-    depends_on:
-      - db
-    command: bun run src/index.ts
-    working_dir: /app
-    restart: unless-stopped
-
-  db:
-    image: postgres:16
-    ports:
-      - "5432:5432"
+      - ./uploads:/app/uploads
+      - ./metadata:/app/metadata
+      - ./files_to_manage:/app/files_to_manage
+      - ./storage:/opt/storage # This is the key change
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin1234
-      POSTGRES_DB: FileManagement
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    restart: unless-stopped
+      - SALT=10
+      - PORT=3000
+      - BODY_SIZE=4000
+      - JWT_EXPIRES_IN=365d
+      - FILE_ROUTE=/opt/storage
+      - JWT_SECRET=c53c73e5c92d9e8838e1519a91aa78cc
+      - DATABASE_URL=postgresql://admin:admin1234@db:5432/FileManagement
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
-  pgdata:
-
-
-  # it's no working, so, let's stop this, can you help me make a docker-compose file as optimized as possible, that builds a docker image, lets the docker image app access files from the local machine, and takes the environment variables from the app .env file, and runs a PostgreSQL on it's default port and exposes it, ah, before i forget, the app is a ElysiaJs app running on bunJs and uses prisma, please make it as explicit as possible
-
+  postgres_data:
+    driver: local
