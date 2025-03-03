@@ -24,9 +24,9 @@ async function main() {
   const maintenance_app_user = await prisma.users.create({
     data: {
       password: await encryptPassword(password_salt, "SadMaintenanceAccountÑÑÑ!!!@@"),
-      email: "sad.maintenance@gruporead<noreply>.com",
       plain_password: "SadMaintenanceAccountÑÑÑ!!!@@",
       username: "SAD Maintenance User",
+      email: "sad.maintenance@sad.com",
       Status: { connect: { id: 1 } },
       Type: { connect: { id: 3 } },
       api_key: generateNanoID(30),

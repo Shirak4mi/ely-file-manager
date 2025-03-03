@@ -8,5 +8,5 @@ export const routes = new Elysia({ prefix: "api" })
   .use(loggerMiddleware)
   .use(errorMiddleware)
   .use([auth])
-  // .use(authMiddleware)
+  .use(authMiddleware)
   .use([files]);

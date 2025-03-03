@@ -24,7 +24,7 @@ export default new Elysia().decorate("api_key", "" as string).post(
       set.headers["Content-Type"] = contentType;
       set.headers["Content-length"] = fileSize;
 
-      const registeredFile = await prisma.metadata.create({
+      const registerFile = await prisma.metadata.create({
         select: { file_path: true, file_name: true, file_mime: true, file_size: true },
         data: {
           file_name: actualFile.name ?? "",
@@ -36,7 +36,7 @@ export default new Elysia().decorate("api_key", "" as string).post(
         },
       });
 
-      return registeredFile;
+      return registerFile;
     } catch (err) {
       console.error(err);
       throw err;
