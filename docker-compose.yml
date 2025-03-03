@@ -35,7 +35,7 @@ services:
       - ./uploads:/app/uploads
       - ./metadata:/app/metadata
       - ./files_to_manage:/app/files_to_manage
-      - ./storage:/opt/storage # This is the key change
+      - /opt/storage:/opt/storage # This is the key change
     environment:
       - SALT=10
       - PORT=3000
