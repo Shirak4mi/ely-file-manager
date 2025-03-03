@@ -2,13 +2,27 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-(async () => {
-  const user_status = await prisma.user_Status.createMany({
-    data: [
-      { name: "Active" },
-      { name: "Password Reset" },
-      { name: "Deleted" },
-    ],
+async function main() {
+  const user_status = await prisma.user_status.createMany({
+    data: [{ name: "Active" }, { name: "Password Reset" }, { name: "Deleted" }],
     skipDuplicates: true,
   });
+
+  const user_type = await prisma.user_type.createMany({
+    data: [{ name: "Application" }, { name: "User" }, { name: "Maintainer" }],
+    skipDuplicates: true,
+  });
+
+  const file_status = await prisma.file_status.createMany({
+    data: [{ name: "Active" }, { name: "Deleted" }],
+    skipDuplicates: true,
+  });
+
+  console.log({ user_status, user_type, file_status });
+}
+
+(async () => {
+  await main();
+  await prisma.$disconnect();
+  process.exit();
 })().then();
