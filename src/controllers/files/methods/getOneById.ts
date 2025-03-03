@@ -10,7 +10,7 @@ export default new Elysia().decorate("apiKey", "" as string).get(
   "get-one-by-id/:id",
   async ({ params: { id }, query: { inline }, set, apiKey, request: req, server }) => {
     try {
-      const doesFileExists = await prisma.files.findFirst({ where: { id }, select: { path: true, name: true } });
+      const doesFileExists = await prisma.metadata.findFirst({ where: { id }, select: { path: true, name: true } });
 
       if (!doesFileExists) throw new NotFoundException("File not found");
 

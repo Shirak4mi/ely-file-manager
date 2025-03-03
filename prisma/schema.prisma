@@ -26,7 +26,7 @@ model Users {
 }
 
 model Metadata {
-     id              Int         @id @default(autoincrement()) @db.Integer
+     id              String      @id @default(uuid()) @db.VarChar(255)
      file_name       String      @db.Text
      file_mime       String      @db.VarChar(60)
      file_path       String      @db.Text
