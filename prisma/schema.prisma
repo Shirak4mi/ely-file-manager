@@ -20,8 +20,8 @@ model Users {
      status_id        Int         @db.SmallInt
      created_at       DateTime    @default(now()) @db.Timestamptz()
      updated_at       DateTime?   @updatedAt @db.Timestamptz()
-     Status           User_Status @relation(fields: [status_id], references: [id])
-     Type             User_Type   @relation(fields: [type_id], references: [id])
+     Status           User_status @relation(fields: [status_id], references: [id])
+     Type             User_type   @relation(fields: [type_id], references: [id])
      Files            Metadata[]
 }
 
@@ -36,12 +36,12 @@ model Metadata {
      created_at      DateTime    @default(now()) @db.Timestamptz()
      updated_at      DateTime?   @updatedAt @db.Timestamptz()
      User            Users       @relation(fields: [related_api_key], references: [api_key])
-     Status          File_Status @relation(fields: [status_id], references: [id])
+     Status          File_status @relation(fields: [status_id], references: [id])
 }
 
 // Regulatory Fields 
 
-model User_Status {
+model User_status {
      id         Int       @id @default(autoincrement()) @db.SmallInt
      name       String    @db.VarChar(255)
      created_at DateTime  @default(now()) @db.Timestamptz()
@@ -49,7 +49,7 @@ model User_Status {
      Users      Users[]
 }
 
-model User_Type {
+model User_type {
      id         Int       @id @default(autoincrement()) @db.SmallInt
      name       String    @db.VarChar(255)
      created_at DateTime  @default(now()) @db.Timestamptz()
@@ -57,7 +57,7 @@ model User_Type {
      Users      Users[]
 }
 
-model File_Status {
+model File_status {
      id         Int        @id @default(autoincrement()) @db.SmallInt
      name       String     @db.VarChar(255)
      created_at DateTime   @default(now()) @db.Timestamptz()
