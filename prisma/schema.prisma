@@ -22,17 +22,21 @@ model Users {
      updated_at       DateTime?   @updatedAt @db.Timestamptz()
      Status           User_Status @relation(fields: [status_id], references: [id])
      Type             User_Type   @relation(fields: [type_id], references: [id])
+     Files            Metadata[]
 }
 
 model Metadata {
-     id         Int       @id @default(autoincrement()) @db.Integer
-     file_name  String    @db.Text
-     file_mime  String    @db.VarChar(60)
-     file_path  String    @db.Text
-     file_size  Int       @db.Integer
-     status_id  Int       @db.SmallInt
-     created_at DateTime  @default(now()) @db.Timestamptz()
-     updated_at DateTime? @updatedAt @db.Timestamptz()
+     id              Int         @id @default(autoincrement()) @db.Integer
+     file_name       String      @db.Text
+     file_mime       String      @db.VarChar(60)
+     file_path       String      @db.Text
+     file_size       Int         @db.Integer
+     related_api_key String      @db.VarChar(255)
+     status_id       Int         @db.SmallInt
+     created_at      DateTime    @default(now()) @db.Timestamptz()
+     updated_at      DateTime?   @updatedAt @db.Timestamptz()
+     User            Users       @relation(fields: [related_api_key], references: [api_key])
+     Status          File_Status @relation(fields: [status_id], references: [id])
 }
 
 // Regulatory Fields 
@@ -54,8 +58,9 @@ model User_Type {
 }
 
 model File_Status {
-     id         Int       @id @default(autoincrement()) @db.SmallInt
-     name       String    @db.VarChar(255)
-     created_at DateTime  @default(now()) @db.Timestamptz()
-     updated_at DateTime? @updatedAt @db.Timestamptz()
+     id         Int        @id @default(autoincrement()) @db.SmallInt
+     name       String     @db.VarChar(255)
+     created_at DateTime   @default(now()) @db.Timestamptz()
+     updated_at DateTime?  @updatedAt @db.Timestamptz()
+     Metadata   Metadata[]
 }
