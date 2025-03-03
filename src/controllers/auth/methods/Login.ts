@@ -15,11 +15,9 @@ export default new Elysia().decorate("jwt", {} as { sign: Function }).post(
       });
 
       if (!isValidUser) throw new UnauthorizedException("Invalid Credentials");
-      const { id: _id = "", api_key = "", password: uPword, password_salt: pwsalt } = isValidUser;
+      const { id: _id = "", api_key = "", password: encrypt, password_salt: salt } = isValidUser;
 
-      console.log({ pwsalt, uPword, password, unh: await Bun.password.verify(password, pwsalt + uPword, "argon2d") });
-
-      const isValidPassword = await Bun.password.verify(password, pwsalt + uPword, "argon2d");
+      const isValidPassword = await Bun.password.verify(salt + password, encrypt, "argon2d");
 
       if (!isValidPassword) throw new UnauthorizedException("Invalid Credentials");
 
