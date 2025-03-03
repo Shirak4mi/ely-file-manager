@@ -3,6 +3,7 @@ import { NotFoundException } from "./error/index.ts";
 import { mkdir, readdir } from "node:fs/promises";
 import { file_path } from "./env.ts";
 import { file, password } from "bun";
+import { PasswordHashOptions } from "@/types/index.ts";
 
 export { default as generateNanoID } from "./nanoID/index.ts";
 export { default as HyperScalePathResolver } from "./HyperCache/index.ts";
@@ -207,19 +208,65 @@ export async function createFileOnsFSEmpty(workingFP?: string): Promise<number |
   return await Bun.write(workingFP, "");
 }
 
+
+/**
+ * Extracts the file extension from a filename with proper formatting.
+ * Handles paths and ensures proper lowercase formatting.
+ * @param filename - The filename or path to extract the extension from.
+ * @returns The lowercase file extension with a leading dot (e.g., ".jpg"), or an empty string if no extension exists.
+ * @example
+ * getFileExtension("document.pdf"); // returns ".pdf"
+ * getFileExtension("image.JPG"); // returns ".jpg"
+ * getFileExtension("README"); // returns ""
+ * getFileExtension("folder/file.txt"); // returns ".txt"
+ * getFileExtension("path/to/file.with.multiple.dots"); // returns ".dots"
+ */
 export function getFileExtension(filename: string): string {
-  const ext = (filename.split(".").pop() ?? "").toLowerCase() || "";
-  return ext ? `.${ext}` : "";
+  // Get the basename in case a path is provided
+  const basename = filename.split(/[\\/]/).pop() || "";
+
+  // Extract extension using regex to handle cases with no extension
+  const match = basename.match(/\.([^.]+)$/);
+  return match ? `.${match[1].toLowerCase()}` : "";
 }
 
+/**
+ * Generates a random salt string for cryptographic purposes.
+ *
+ * @returns A 16-character random string containing alphanumeric characters (a-z, A-Z, 0-9).
+ * @example
+ * const salt = generateRandomSalt(); // e.g. "aB7cD9eF2gH5jK3"
+ */
 export function generateRandomSalt(): string {
   return generateRandomString(16, alphabet("a-z", "A-Z", "0-9"));
 }
 
+/**
+ * Generates a random token for authentication or identification purposes.
+ *
+ * @returns A 12-character random string containing alphanumeric characters (a-z, A-Z, 0-9).
+ * @example
+ * const token = generateToken(); // e.g. "x7Yz3Ab9Cd2E"
+ */
 export function generateToken(): string {
-  return generateRandomString(12, alphabet("a-z", "A-Z", "0-9"));
+  return generateRandomString(32, alphabet("a-z", "A-Z", "0-9"));
 }
 
-export async function encryptPassword(salt: string, pass: string): Promise<string> {
-  return await password.hash(salt + pass, { algorithm: "argon2d" });
+/**
+ * Encrypts a password using Argon2id hashing algorithm with a provided salt.
+ *
+ * @param salt - A unique string to be prepended to the password before hashing.
+ * @param pass - The password string to encrypt.
+ * @param options - Optional configuration parameters for the hashing algorithm.
+ * @returns A Promise that resolves to the hashed password string.
+ * @example
+ * const salt = generateRandomSalt();
+ * const hashedPassword = await encryptPassword(salt, "mySecurePassword");
+ */
+export function encryptPassword(
+  salt: string,
+  pass: string,
+  options: PasswordHashOptions = { algorithm: "argon2id", memoryCost: 65536, timeCost: 3 }
+): Promise<string> {
+  return password.hash(salt + pass, options);
 }

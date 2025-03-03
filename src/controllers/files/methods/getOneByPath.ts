@@ -12,6 +12,7 @@ export default new Elysia().decorate("api_key", "" as string).get(
     try {
       const validFilePath = await getWorkingFilePath(decodeURIComponent(path));
       if (!validFilePath) throw new NotFoundException("File not found, please check provided path");
+
       const actualFile = bFile(validFilePath ?? "");
       const contentType = actualFile.type || "application/octet-stream";
       const fileSize = actualFile.size;

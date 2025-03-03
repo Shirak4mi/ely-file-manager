@@ -28,6 +28,7 @@ class SharedPathCache {
 
   private shards: Array<Map<string, { path: string; expires: number }>>;
   private stats: { hits: number; misses: number; evictions: number };
+  private cleanupInterval: number;
 
   constructor() {
     // Initialize shards
@@ -38,7 +39,7 @@ class SharedPathCache {
     this.stats = { hits: 0, misses: 0, evictions: 0 };
 
     // Periodic cleanup to prevent memory leaks (run every 10 seconds)
-    setInterval(() => this.cleanup(), 10000);
+    this.cleanupInterval = setInterval(() => this.cleanup(), 10000) as unknown as number;
   }
 
   /**
@@ -64,7 +65,8 @@ class SharedPathCache {
     }
 
     // Check if expired
-    if (Date.now() > entry.expires) {
+    const now = Date.now();
+    if (now > entry.expires) {
       shard.delete(key);
       this.stats.evictions++;
       return undefined;
@@ -142,6 +144,14 @@ class SharedPathCache {
   }
 
   /**
+   * Dispose of cache resources
+   */
+  dispose(): void {
+    clearInterval(this.cleanupInterval);
+    this.shards.forEach((shard) => shard.clear());
+  }
+
+  /**
    * Returns cache statistics
    */
   getStats() {
@@ -177,57 +187,83 @@ class FileWorkerPool {
   }> = [];
   private processing = false;
   private maxConcurrentTasksPerWorker: number;
+  private workerTimeout: number; // Timeout for worker operations
 
   constructor(
     options: {
       numWorkers?: number;
       maxConcurrentTasksPerWorker?: number;
+      workerTimeout?: number;
+      workerPath?: string;
     } = {}
   ) {
     // Bun benefits from higher worker concurrency
     const numWorkers = options.numWorkers || Math.max(2, Math.min(cpus().length, 12));
     this.maxConcurrentTasksPerWorker = options.maxConcurrentTasksPerWorker || 8;
+    this.workerTimeout = options.workerTimeout || 5000; // 5 second default timeout
+    const workerPath = options.workerPath || new URL("./file-worker.ts", import.meta.url).toString();
 
-    // Create workers using proper Worker API
-    for (let i = 0; i < numWorkers; i++) {
-      // Create worker from file instead of string script
-      const worker = new Worker(new URL("./file-worker.ts", import.meta.url));
+    try {
+      // Create workers using proper Worker API
+      for (let i = 0; i < numWorkers; i++) {
+        // Create worker from file instead of string script
+        const worker = new Worker(workerPath);
 
-      // Set up message handler with the proper Node.js worker_threads API
-      worker.on("message", (result) => {
-        // Mark worker as potentially available
-        const workerStatus = this.workerStatus[result.workerId];
-        workerStatus.taskCount--;
+        // Set up message handler with the proper Node.js worker_threads API
+        worker.on("message", (result) => {
+          // Mark worker as potentially available
+          const workerStatus = this.workerStatus[result.workerId];
+          if (workerStatus) {
+            workerStatus.taskCount--;
 
-        if (workerStatus.taskCount === 0) {
-          workerStatus.busy = false;
-        }
-
-        // Find the task in the active tasks
-        if (result.error) {
-          // Find the right promise to reject
-          this.activeTasks.forEach((task, index) => {
-            if (task && task.workerId === result.workerId && task.taskId === result.taskId) {
-              task.reject(new Error(result.error));
-              this.activeTasks[index] = null; // Clear the slot
+            if (workerStatus.taskCount === 0) {
+              workerStatus.busy = false;
             }
-          });
-        } else if (result.path) {
-          // Find the right promise to resolve
-          this.activeTasks.forEach((task, index) => {
-            if (task && task.workerId === result.workerId && task.taskId === result.taskId) {
-              task.resolve(result.path);
-              this.activeTasks[index] = null; // Clear the slot
-            }
-          });
-        }
+          }
 
-        // Process next items in queue
-        this.processQueue();
-      });
+          // Find the task in the active tasks
+          if (result.error) {
+            // Find the right promise to reject
+            this.activeTasks.forEach((task, index) => {
+              if (task && task.workerId === result.workerId && task.taskId === result.taskId) {
+                task.reject(new Error(result.error));
+                this.activeTasks[index] = null; // Clear the slot
+              }
+            });
+          } else if (result.path) {
+            // Find the right promise to resolve
+            this.activeTasks.forEach((task, index) => {
+              if (task && task.workerId === result.workerId && task.taskId === result.taskId) {
+                task.resolve(result.path);
+                this.activeTasks[index] = null; // Clear the slot
+              }
+            });
+          }
 
-      this.workers.push(worker);
-      this.workerStatus.push({ busy: false, taskCount: 0 });
+          // Process next items in queue
+          this.processQueue();
+        });
+
+        worker.on("error", (err) => {
+          console.error(`Worker ${i} error:`, err);
+          // Try to recreate the worker
+          try {
+            worker.terminate();
+            const newWorker = new Worker(workerPath);
+            newWorker.on("message", worker.listeners("message")[0] as (...args: any[]) => void); // Copy message handler
+            newWorker.on("error", worker.listeners("error")[0] as (...args: any[]) => void); // Copy error handler
+            this.workers[i] = newWorker;
+          } catch (recreateErr) {
+            console.error(`Failed to recreate worker ${i}:`, recreateErr);
+          }
+        });
+
+        this.workers.push(worker);
+        this.workerStatus.push({ busy: false, taskCount: 0 });
+      }
+    } catch (err) {
+      console.error("Error initializing worker pool:", err);
+      throw new Error("Failed to initialize worker pool: " + (err instanceof Error ? err.message : String(err)));
     }
   }
 
@@ -237,6 +273,7 @@ class FileWorkerPool {
     taskId: number;
     resolve: (result: string) => void;
     reject: (error: Error) => void;
+    timeoutId?: Timer;
   } | null> = Array(1000).fill(null);
   private nextTaskId = 0;
 
@@ -255,7 +292,7 @@ class FileWorkerPool {
    * Optimized for Bun's performance characteristics
    */
   private processQueue(): void {
-    if (this.processing || this.queue.length === 0) {
+    if (this.processing || this.queue.length === 0 || this.workers.length === 0) {
       return;
     }
 
@@ -299,12 +336,30 @@ class FileWorkerPool {
           this.activeTasks.push(null);
         }
 
+        // Set timeout for the worker task
+        const timeoutId = setTimeout(() => {
+          const activeTask = this.activeTasks[slotIndex];
+          if (activeTask && activeTask.taskId === taskId && activeTask.workerId === workerId) {
+            activeTask.reject(new Error(`Worker task timed out after ${this.workerTimeout}ms: ${task.path}`));
+            this.activeTasks[slotIndex] = null;
+
+            // Update worker status
+            if (workerStatus) {
+              workerStatus.taskCount = Math.max(0, workerStatus.taskCount - 1);
+              if (workerStatus.taskCount === 0) {
+                workerStatus.busy = false;
+              }
+            }
+          }
+        }, this.workerTimeout);
+
         // Store task in active tasks
         this.activeTasks[slotIndex] = {
           workerId,
           taskId,
           resolve: task.resolve,
           reject: task.reject,
+          timeoutId,
         };
 
         // Update worker status
@@ -353,73 +408,195 @@ class FileWorkerPool {
    * Terminates all workers
    */
   terminate(): void {
+    // Clear all timeouts first
+    this.activeTasks.forEach((task) => {
+      if (task && task.timeoutId) {
+        clearTimeout(task.timeoutId);
+      }
+    });
+
     for (const worker of this.workers) {
-      worker.terminate();
+      try {
+        worker.terminate();
+      } catch (err) {
+        // Silently handle termination errors
+      }
     }
+    this.workers = [];
+    this.workerStatus = [];
+    this.activeTasks = [];
+    this.queue = [];
   }
 }
 
-// Configuration options
+// Configuration options with defaults
 export interface HyperScalePathResolverConfig {
   basePath: string;
   cacheTTLMs: number;
   maxConcurrentChecks: number;
   unsafeAllowTraversal: boolean;
   logErrors: boolean;
+  maxPendingRequests: number;
   workerPoolOptions?: {
     numWorkers?: number;
     maxConcurrentTasksPerWorker?: number;
+    workerTimeout?: number;
+    workerPath?: string;
   };
+}
+
+// Default configuration
+const DEFAULT_CONFIG: HyperScalePathResolverConfig = {
+  basePath: "",
+  cacheTTLMs: 30000, // 30 seconds
+  maxConcurrentChecks: 1000, // Higher limit for Bun's more efficient async handling
+  unsafeAllowTraversal: false,
+  logErrors: false,
+  maxPendingRequests: 10000,
+  workerPoolOptions: {
+    numWorkers: Math.max(2, Math.min(cpus().length, 12)),
+    maxConcurrentTasksPerWorker: 8,
+    workerTimeout: 5000,
+  },
+};
+
+/**
+ * Ensures a path ends with a trailing slash
+ */
+function ensureTrailingSlash(path: string): string {
+  if (!path) return "/";
+  return path.endsWith("/") ? path : path + "/";
+}
+
+/**
+ * Fast configuration validation - only validates critical parameters
+ * that could cause runtime errors if incorrect
+ */
+function validateCriticalConfig(config: Partial<HyperScalePathResolverConfig>): HyperScalePathResolverConfig {
+  // Create a merged config with defaults
+  const mergedConfig = { ...DEFAULT_CONFIG };
+
+  // Override with user values, validating only critical numeric parameters
+  if (config) {
+    // Apply string/boolean properties directly - these can't cause runtime crashes
+    if (config.basePath !== undefined) {
+      // Ensure basePath ends with a slash
+      mergedConfig.basePath = ensureTrailingSlash(String(config.basePath));
+    }
+
+    if (config.unsafeAllowTraversal !== undefined) mergedConfig.unsafeAllowTraversal = Boolean(config.unsafeAllowTraversal);
+    if (config.logErrors !== undefined) mergedConfig.logErrors = Boolean(config.logErrors);
+
+    // Validate critical numeric properties to prevent runtime errors
+    if (config.cacheTTLMs !== undefined) {
+      const value = Number(config.cacheTTLMs);
+      mergedConfig.cacheTTLMs = !isNaN(value) && value >= 0 ? value : DEFAULT_CONFIG.cacheTTLMs;
+    }
+
+    if (config.maxConcurrentChecks !== undefined) {
+      const value = Number(config.maxConcurrentChecks);
+      mergedConfig.maxConcurrentChecks = !isNaN(value) && value > 0 ? value : DEFAULT_CONFIG.maxConcurrentChecks;
+    }
+
+    if (config.maxPendingRequests !== undefined) {
+      const value = Number(config.maxPendingRequests);
+      mergedConfig.maxPendingRequests = !isNaN(value) && value > 0 ? value : DEFAULT_CONFIG.maxPendingRequests;
+    }
+
+    // Handle worker pool options
+    if (config.workerPoolOptions) {
+      mergedConfig.workerPoolOptions = { ...mergedConfig.workerPoolOptions };
+
+      if (config.workerPoolOptions.numWorkers !== undefined) {
+        const value = Number(config.workerPoolOptions.numWorkers);
+        mergedConfig.workerPoolOptions.numWorkers =
+          !isNaN(value) && value > 0 ? value : DEFAULT_CONFIG.workerPoolOptions!.numWorkers;
+      }
+
+      if (config.workerPoolOptions.maxConcurrentTasksPerWorker !== undefined) {
+        const value = Number(config.workerPoolOptions.maxConcurrentTasksPerWorker);
+        mergedConfig.workerPoolOptions.maxConcurrentTasksPerWorker =
+          !isNaN(value) && value > 0 ? value : DEFAULT_CONFIG.workerPoolOptions!.maxConcurrentTasksPerWorker;
+      }
+
+      if (config.workerPoolOptions.workerTimeout !== undefined) {
+        const value = Number(config.workerPoolOptions.workerTimeout);
+        mergedConfig.workerPoolOptions.workerTimeout =
+          !isNaN(value) && value > 0 ? value : DEFAULT_CONFIG.workerPoolOptions!.workerTimeout;
+      }
+
+      if (config.workerPoolOptions.workerPath !== undefined) {
+        mergedConfig.workerPoolOptions.workerPath = String(config.workerPoolOptions.workerPath);
+      }
+    }
+  }
+
+  return mergedConfig;
 }
 
 /**
  * HyperScale path resolver optimized for Bun.js and extreme concurrency
+ * Performance and reliability enhanced
  */
 export default class HyperScalePathResolver {
   private static instance: HyperScalePathResolver;
   private cache: SharedPathCache;
   private workerPool: FileWorkerPool | null = null;
-  private config: HyperScalePathResolverConfig;
+  public config: HyperScalePathResolverConfig;
   // Request throttling
   private activeRequests = 0;
   private pendingRequests: Array<{
     resolve: (value: string) => void;
     reject: (reason: any) => void;
     path: string;
-    priority?: number;
+    priority: number;
+    timestamp: number;
   }> = [];
+  private requestsRejectedDueToOverload = 0;
+  private isShuttingDown = false;
 
   /**
    * Private constructor for singleton pattern
    */
   private constructor(config: Partial<HyperScalePathResolverConfig> = {}) {
-    // Default configuration optimized for Bun performance
-    this.config = {
-      basePath: "",
-      cacheTTLMs: 30000, // 30 seconds
-      maxConcurrentChecks: 1000, // Higher limit for Bun's more efficient async handling
-      unsafeAllowTraversal: false,
-      logErrors: false, // Disabled by default for high-volume scenarios
-      workerPoolOptions: {
-        numWorkers: Math.max(2, Math.min(cpus().length, 12)), // Bun benefits from more workers
-        maxConcurrentTasksPerWorker: 8, // Higher concurrency per worker for Bun
-      },
-      ...config,
-    };
+    // Fast, safe validation for runtime reliability
+    this.config = validateCriticalConfig(config);
 
     // Initialize shared cache
     this.cache = new SharedPathCache();
 
-    // Create worker pool (no need to check isMainThread in Bun)
-    this.workerPool = new FileWorkerPool(this.config.workerPoolOptions);
+    // Create worker pool
+    try {
+      this.workerPool = new FileWorkerPool(this.config.workerPoolOptions);
+    } catch (err) {
+      if (this.config.logErrors) {
+        console.error("Failed to initialize worker pool:", err);
+        console.warn("Falling back to direct file checks (lower performance)");
+      }
+      this.workerPool = null;
+    }
   }
 
   /** Get singleton instance (for sharing cache across all requests) */
   static getInstance(config?: Partial<HyperScalePathResolverConfig>): HyperScalePathResolver {
     if (!HyperScalePathResolver.instance) {
       HyperScalePathResolver.instance = new HyperScalePathResolver(config);
+    } else if (config) {
+      // Update configuration if provided (useful for changing basePath dynamically)
+      HyperScalePathResolver.instance.updateConfig(config);
     }
     return HyperScalePathResolver.instance;
+  }
+
+  /** Create a new instance (non-singleton) - useful for different configurations */
+  static createInstance(config?: Partial<HyperScalePathResolverConfig>): HyperScalePathResolver {
+    return new HyperScalePathResolver(config);
+  }
+
+  /** Update configuration at runtime */
+  updateConfig(config: Partial<HyperScalePathResolverConfig>): void {
+    const newConfig = validateCriticalConfig({ ...this.config, ...config });
+    this.config = newConfig;
   }
 
   /** Ultra-fast path normalization optimized for high throughput */
@@ -445,21 +622,31 @@ export default class HyperScalePathResolver {
    * Used as a fallback when worker pool is not available
    */
   private async directFileCheck(path: string): Promise<string> {
-    // Use Bun's ultra-fast file API
-    const exists = await Bun.file(path).exists();
+    try {
+      // Use Bun's ultra-fast file API
+      const exists = await Bun.file(path).exists();
 
-    if (exists) {
-      return path;
+      if (exists) {
+        return path;
+      }
+
+      throw new NotFoundException(`File does not exist: ${path}`);
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      throw new FileAccessException(`Error accessing file: ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
-
-    throw new NotFoundException(`File does not exist: ${path}`);
   }
 
   /**
    * Resolves and validates a file path
-   * Optimized for extremely high concurrency
+   * Optimized for extremely high concurrency with memory safeguards
    */
   async getWorkingFilePath(path?: string, priority = 0): Promise<string> {
+    // Check if system is shutting down
+    if (this.isShuttingDown) {
+      throw new Error("System is shutting down");
+    }
+
     // Validate input with fast return for invalid cases
     if (!path) {
       const error = new NotFoundException("File path not provided");
@@ -472,15 +659,33 @@ export default class HyperScalePathResolver {
 
     // Check cache first (ultra fast)
     const cachedPath = this.cache.get(normalizedPath);
-    if (cachedPath) {
-      return cachedPath;
-    }
+    if (cachedPath) return cachedPath;
 
     // Apply throttling for high concurrency
     if (this.activeRequests >= this.config.maxConcurrentChecks) {
+      // Check if we've hit the pending requests limit
+      if (this.pendingRequests.length >= this.config.maxPendingRequests) {
+        this.requestsRejectedDueToOverload++;
+
+        // Memory safety: reject new requests when queue is full
+        const error = new Error(
+          `System overloaded: Too many pending requests (${this.pendingRequests.length}). Try again later.`
+        );
+        if (this.config.logErrors) {
+          console.error(error);
+        }
+        throw error;
+      }
+
       // Queue the request instead of processing immediately
       return new Promise((resolve, reject) => {
-        this.pendingRequests.push({ resolve, reject, path: normalizedPath, priority });
+        this.pendingRequests.push({
+          resolve,
+          reject,
+          path: normalizedPath,
+          priority,
+          timestamp: Date.now(),
+        });
       });
     }
 
@@ -493,7 +698,12 @@ export default class HyperScalePathResolver {
     this.activeRequests++;
 
     try {
-      // Build the file path
+      // Check for shutdown state
+      if (this.isShuttingDown) {
+        throw new Error("System is shutting down");
+      }
+
+      // Build the file path - config.basePath is now guaranteed to end with '/'
       const fullPath = this.config.basePath + normalizedPath;
 
       // Check file existence (via worker pool if available)
@@ -512,8 +722,7 @@ export default class HyperScalePathResolver {
 
       return resolvedPath;
     } catch (err) {
-      console.log(err);
-
+      // Proper error handling with consistent logging
       if (err instanceof NotFoundException) {
         if (this.config.logErrors) {
           console.error(`File not found: ${normalizedPath}`);
@@ -528,26 +737,67 @@ export default class HyperScalePathResolver {
     } finally {
       this.activeRequests--;
 
-      // Process next pending request if any
-      if (this.pendingRequests.length > 0) {
-        // Sort pending requests by priority before processing next
+      // Process next pending request if any (and if not shutting down)
+      if (!this.isShuttingDown && this.pendingRequests.length > 0) {
+        // Sort by priority and then by age (FIFO within same priority)
         if (this.pendingRequests.length > 1) {
-          this.pendingRequests.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+          this.pendingRequests.sort((a, b) => {
+            // First sort by priority (higher first)
+            const priorityDiff = b.priority - a.priority;
+            if (priorityDiff !== 0) return priorityDiff;
+
+            // Then by age (older first) for requests with same priority
+            return a.timestamp - b.timestamp;
+          });
         }
 
         const nextRequest = this.pendingRequests.shift()!;
-        this.processPathRequest(nextRequest.path, nextRequest.priority).then(nextRequest.resolve).catch(nextRequest.reject);
+
+        // Use Promise-based approach to avoid deep recursion
+        Promise.resolve()
+          .then(() => {
+            return this.processPathRequest(nextRequest.path, nextRequest.priority);
+          })
+          .then(nextRequest.resolve)
+          .catch(nextRequest.reject);
       }
     }
   }
 
-  /** Get resolver statistics */
+  /** Get resolver statistics with enhanced metrics */
   getStats() {
     return {
       cache: this.cache.getStats(),
       activeRequests: this.activeRequests,
       queuedRequests: this.pendingRequests.length,
+      maxQueueCapacity: this.config.maxPendingRequests,
+      queueUtilizationPercent: Math.round((this.pendingRequests.length / this.config.maxPendingRequests) * 100),
+      requestsRejectedDueToOverload: this.requestsRejectedDueToOverload,
+      oldestPendingRequestAgeMs:
+        this.pendingRequests.length > 0 ? Date.now() - Math.min(...this.pendingRequests.map((r) => r.timestamp)) : 0,
+      shutdownState: this.isShuttingDown,
       workerPool: this.workerPool?.getStats() || "No worker pool available",
     };
+  }
+
+  /** Clean shutdown method */
+  shutdown() {
+    // Mark system as shutting down
+    this.isShuttingDown = true;
+
+    // Terminate worker pool
+    if (this.workerPool) {
+      this.workerPool.terminate();
+      this.workerPool = null;
+    }
+
+    // Dispose of cache to clear interval
+    this.cache.dispose();
+
+    // Reject all pending requests
+    while (this.pendingRequests.length > 0) {
+      const request = this.pendingRequests.shift()!;
+      request.reject(new Error("System shutting down"));
+    }
   }
 }
