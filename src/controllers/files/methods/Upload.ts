@@ -13,9 +13,9 @@ import {
 import { Elysia } from "elysia";
 import { prisma } from "@/db";
 
-export default new Elysia().decorate("apiKey", "" as string).post(
+export default new Elysia().decorate("api_key", "" as string).post(
   "upload",
-  async ({ body: { path, file }, apiKey, request: req, server, set }) => {
+  async ({ body: { path, file }, api_key, request: req, server, set }) => {
     try {
       const workingFP = await createFilePathIfDoesntExists(path);
       const createdFile = await createFileOnsFS(workingFP, file);
@@ -29,22 +29,21 @@ export default new Elysia().decorate("apiKey", "" as string).post(
       set.headers["Content-length"] = actualFile.size;
       set.headers["Content-Type"] = contentType;
 
-      const requestedBy = await prisma.users.findFirst({ where: { apiKey }, select: { id: true, name: true, email: true } });
+      const requestedBy = await prisma.users.findFirst({
+        select: { id: true, username: true, email: true },
+        where: { api_key },
+      });
 
-      const registeredFile = await prisma.files.create({
+      const registeredFile = await prisma.metadata.create({
+        select: { file_path: true, file_name: true, file_mime: true, file_size: true },
         data: {
-          apiKey,
-          name: file.name,
-          path: totalFilePath,
-          createdAt: new Date(),
-          extension: getFileExtension(file.name),
-          size: file.size,
-          softDelete: false,
-          type: file.type,
-          updatedAt: new Date(),
-          uploadedByPath: false,
+          file_name: actualFile.name ?? "",
+          User: { connect: { api_key } },
+          Status: { connect: { id: 1 } },
+          file_mime: actualFile.type,
+          file_size: actualFile.size,
+          file_path: totalFilePath,
         },
-        select: { path: true, name: true, extension: true, size: true },
       });
 
       const requestedToken =
@@ -70,6 +69,8 @@ export default new Elysia().decorate("apiKey", "" as string).post(
         requestAt: new Date(),
         response: { message: ["File retrieved successfully"], statusCode: 200 },
       });
+      
+      return registeredFile;
     } catch (err) {
       console.error(err);
       throw err;

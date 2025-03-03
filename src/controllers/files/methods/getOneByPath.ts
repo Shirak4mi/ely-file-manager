@@ -5,9 +5,9 @@ import { prisma } from "@/db";
 
 import { Elysia, file } from "elysia";
 
-export default new Elysia().decorate("apiKey", "" as string).get(
+export default new Elysia().decorate("api_key", "" as string).get(
   "get-one-by-path/:path",
-  async ({ params: { path }, query: { inline }, set, server, request: req, apiKey }) => {
+  async ({ params: { path }, query: { inline }, set, server, request: req, api_key }) => {
     try {
       const validFilePath = await getWorkingFilePath(decodeURIComponent(path));
       const actualFile = bFile(validFilePath ?? "");
@@ -19,12 +19,15 @@ export default new Elysia().decorate("apiKey", "" as string).get(
       set.headers["Content-length"] = cntnLength;
       set.headers["Content-Type"] = contentType;
 
-      const requestedBy = await prisma.users.findFirst({ where: { apiKey }, select: { id: true, name: true, email: true } });
+      const requestedBy = await prisma.users.findFirst({
+        select: { id: true, username: true, email: true },
+        where: { api_key },
+      });
 
       const requestedToken =
         req.headers.get("authorization") !== null ? (req.headers.get("authorization") ?? " ").split(" ")[1] : "N/A";
 
-      logger("INFO", "GET ONE FILE BY ID", {
+      logger("INFO", "GET ONE FILE BY PATH", {
         requestedBy,
         requestIpFrom: convertIPv6ToIPv4(server ? server.requestIP.toString() : "N/A"),
         requestUserAgent: req.headers.get("user-agent"),

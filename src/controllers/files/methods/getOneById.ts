@@ -6,18 +6,21 @@ import { prisma } from "@/db";
 
 import { Elysia } from "elysia";
 
-export default new Elysia().decorate("apiKey", "" as string).get(
+export default new Elysia().decorate("api_key", "" as string).get(
   "get-one-by-id/:id",
-  async ({ params: { id }, query: { inline }, set, apiKey, request: req, server }) => {
+  async ({ params: { id }, query: { inline }, set, api_key, request: req, server }) => {
     try {
-      const doesFileExists = await prisma.metadata.findFirst({ where: { id }, select: { path: true, name: true } });
+      const doesFileExists = await prisma.metadata.findFirst({
+        select: { file_path: true, file_name: true },
+        where: { id },
+      });
 
       if (!doesFileExists) throw new NotFoundException("File not found");
 
-      const { path, name } = doesFileExists;
+      const { file_path, file_name } = doesFileExists;
 
-      const basePath = returnActualOSPath(path);
-      const totalFilePath = (await isDirectory(basePath)) ? basePath + name : path;
+      const basePath = returnActualOSPath(file_path);
+      const totalFilePath = (await isDirectory(basePath)) ? basePath + file_name : file_path;
       const actualFile = bFile(totalFilePath);
       const contentType = actualFile.type || "application/octet-stream";
       const cntnLength: string = (actualFile.length as number).toString();
@@ -26,7 +29,10 @@ export default new Elysia().decorate("apiKey", "" as string).get(
       set.headers["Content-length"] = cntnLength;
       set.headers["Content-Type"] = contentType;
 
-      const requestedBy = await prisma.users.findFirst({ where: { apiKey }, select: { id: true, name: true, email: true } });
+      const requestedBy = await prisma.users.findFirst({
+        select: { id: true, username: true, email: true },
+        where: { api_key },
+      });
 
       const requestedToken =
         req.headers.get("authorization") !== null ? (req.headers.get("authorization") ?? " ").split(" ")[1] : "N/A";

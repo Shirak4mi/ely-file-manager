@@ -3,7 +3,7 @@ import { filterMessage } from "@/utils/functions";
 
 import type { Elysia } from "elysia";
 
-export const useErrorMiddleware = (app: Elysia) => {
+export default function useErrorMiddleware(app: Elysia) {
   return app.onError(async ({ code, error, request, set }): Promise<ErrorResponse> => {
     const status = set.status ?? (error as Error).message ?? 500;
     const message = filterMessage((error as Error).message);
@@ -19,4 +19,4 @@ export const useErrorMiddleware = (app: Elysia) => {
       code,
     };
   });
-};
+}
