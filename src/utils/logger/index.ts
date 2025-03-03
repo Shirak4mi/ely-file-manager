@@ -1,13 +1,6 @@
-import { createFilePathIfDoesntExists, returnActualOSPath } from "../functions";
+import { createFilePathIfDoesntExists, returnActualOSPath } from "../functions.ts";
 
-/** A value that can be a string, number, boolean, or a nested object with MetaValue properties */
-type MetaValue = string | number | boolean | { [key: string]: MetaValue };
-
-/** An object with string keys and MetaValue values, allowing nested structures */
-type Meta = { [key: string]: MetaValue };
-
-/** The log level indicating severity */
-type LogLevel = "INFO" | "ERROR" | "DEBUG" | "WARN";
+import type { LogLevel, Meta, MetaValue } from "@/types/index.ts";
 
 async function ensureFpOrThrow(): Promise<boolean> {
   try {
