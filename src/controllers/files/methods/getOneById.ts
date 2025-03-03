@@ -1,4 +1,4 @@
-import { isDirectory, returnActualOSPath } from "@/utils/functions.ts";
+import { ensureTrailingSlash, isDirectory, returnActualOSPath } from "@/utils/functions.ts";
 import { IdBasedTokenDTO, InlineQueryDTO } from "@/common/dto's.ts";
 import { NotFoundException } from "@/utils/error";
 import { file as bFile } from "bun";

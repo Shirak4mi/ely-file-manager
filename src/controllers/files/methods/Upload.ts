@@ -1,4 +1,9 @@
-import { createFilePathIfDoesntExists, returnActualOSPath, createFileOnsFS } from "@/utils/functions.ts";
+import {
+  createFilePathIfDoesntExists,
+  ensureTrailingSlash,
+  returnActualOSPath,
+  createFileOnsFS,
+} from "@/utils/functions.ts";
 import { ImATeapotException } from "@/utils/error";
 import { FileUploadDTO } from "@/common/dto's";
 import { file as bFile } from "bun";
@@ -12,9 +17,10 @@ export default new Elysia().decorate("api_key", "" as string).post(
     try {
       const workingFP = await createFilePathIfDoesntExists(path);
       const createdFile = await createFileOnsFS(workingFP, file);
+
       if (!createdFile) throw new ImATeapotException("There was an error uploading the file");
 
-      const totalFilePath = returnActualOSPath(path + file.name);
+      const totalFilePath = returnActualOSPath(ensureTrailingSlash(path) + file.name);
       const actualFile = bFile(totalFilePath ?? "");
 
       // Actual File MetaData

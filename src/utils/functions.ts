@@ -366,6 +366,32 @@ export function encryptPassword(salt: string, pass: string): Promise<string> {
   return Bun.password.hash(salt + pass, { algorithm: "argon2d" });
 }
 
+/**
+ * Ensures that a given path string ends with a forward slash ('/').
+ * If the path is empty, it returns a single forward slash.
+ * If the path already ends with a forward slash, it returns the path unchanged.
+ *
+ * @param {string} path - The path string to process.
+ * @returns {string} The path string with a trailing forward slash.
+ *
+ * @example
+ * // Returns: "/my/path/"
+ * ensureTrailingSlash("/my/path");
+ *
+ * @example
+ * // Returns: "/my/path/"
+ * ensureTrailingSlash("/my/path/");
+ *
+ * @example
+ * // Returns: "/"
+ * ensureTrailingSlash("");
+ */
+export function ensureTrailingSlash(path: string): string {
+  const len: number = path.length;
+  if (len === 0) return "/";
+  return path.charCodeAt(len - 1) !== 47 ? path + "/" : path;
+}
+
 export { default as HyperScalePathResolver } from "./HyperCache/index.ts";
 export { default as generateNanoID } from "./nanoID/index.ts";
 export * from "./logger/index.ts";
