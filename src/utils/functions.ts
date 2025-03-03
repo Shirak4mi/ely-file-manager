@@ -2,9 +2,6 @@ import { alphabet, generateRandomString } from "oslo/crypto";
 import { NotFoundException } from "./error/index.ts";
 import { mkdir, readdir } from "node:fs/promises";
 import { file_path } from "./env.ts";
-import { password } from "bun";
-
-import type { PasswordHashOptions } from "@/types/index.ts";
 
 /**
  * Determines if a string contains valid JSON
@@ -365,8 +362,8 @@ export function generateToken(): string {
  * const salt = generateRandomSalt();
  * const hashedPassword = await encryptPassword(salt, "mySecurePassword");
  */
-export function encryptPassword(salt: string, pass: string): Promise<string> {
-  return password.hash(salt + pass, { algorithm: "argon2d" });
+export function encryptPassword(pass: string): Promise<string> {
+  return Bun.password.hash(pass, { algorithm: "argon2d" });
 }
 
 export { default as HyperScalePathResolver } from "./HyperCache/index.ts";
