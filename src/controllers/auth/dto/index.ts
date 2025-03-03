@@ -6,3 +6,7 @@ export const loginUserDTO = t.Object({
 });
 
 export type TLoginUserDTO = Static<typeof loginUserDTO>;
+
+export const CreateUserDTO = t.Object({});
+
+export type TCreateUserDTO = Static<typeof CreateUserDTO>;
