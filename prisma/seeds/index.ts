@@ -20,7 +20,6 @@ async function main() {
   });
 
   const password_salt = generateRandomSalt();
-  const hashed_token = generateToken();
 
   const maintenance_app_user = await prisma.users.create({
     data: {
