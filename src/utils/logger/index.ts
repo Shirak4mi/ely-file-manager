@@ -1,8 +1,22 @@
+import { createFilePathIfDoesntExists, returnActualOSPath } from "../functions";
+
 /** A value that can be a string, number, boolean, or a nested object with MetaValue properties */
 type MetaValue = string | number | boolean | { [key: string]: MetaValue };
 
 /** An object with string keys and MetaValue values, allowing nested structures */
 type Meta = { [key: string]: MetaValue };
+
+/** The log level indicating severity */
+type LogLevel = "INFO" | "ERROR" | "DEBUG" | "WARN";
+
+async function ensureFpOrThrow(): Promise<boolean> {
+  try {
+    return !!(await createFilePathIfDoesntExists("/logs/"));
+  } catch (err) {
+    console.error(err);
+    return false;
+  }
+}
 
 /**
  * Normalizes text by trimming, lowercasing, and cleaning non-alphanumeric chars.
@@ -111,7 +125,7 @@ function formatMetaLines(meta: Meta): string {
  * @param {Meta} [meta] - Optional metadata object
  * @returns {string} - Formatted log entry
  */
-export default function logEntry(timestamp: string, level: string, message: string, meta?: Meta): string {
+function logEntry(timestamp: string, level: string, message: string, meta?: Meta): string {
   const width = 125;
   const separator = "═".repeat(width);
   const dashLine = "─".repeat(width);
@@ -135,4 +149,28 @@ export default function logEntry(timestamp: string, level: string, message: stri
   lines.push(separator, "", "");
   lines.push("\n\n\n");
   return lines.join("\n");
+}
+
+/**
+ * Asynchronously logs a message with a level and optional metadata to a file.
+ * Writes efficiently by appending to 'sad_logs.log' in the logger_fp directory.
+ * Skips logging if the file path check fails, with errors logged to console.
+ *
+ * @param {("INFO" | "ERROR" | "DEBUG" | "WARN")} level - The log level indicating severity
+ * @param {string} message - The message to log, can include newlines
+ * @param {Record<string, any>} [meta] - Optional metadata as a key-value object
+ * @returns {Promise<void>} Resolves when logging is complete or skipped
+ * @throws {Error} Does not throw; errors are caught and logged to console
+ */
+export async function logger(level: LogLevel, message: string, meta?: Record<string, any>): Promise<void> {
+  if (!(await ensureFpOrThrow())) return;
+  try {
+    const file = Bun.file(returnActualOSPath("/logs/") + "/sad_logs.log");
+    const existingContent = (await file.exists()) ? await file.text() : "";
+    const fileWriter = file.writer({ highWaterMark: 64 * 1024 });
+    fileWriter.write(existingContent + logEntry(new Date().toISOString(), level, message, meta));
+    await fileWriter.end();
+  } catch (err) {
+    console.error("Failed to write to log file:", err);
+  }
 }
