@@ -1,38 +1,16 @@
 generator client {
-  provider = "prisma-client-js"
+     provider      = "prisma-client-js"
+     binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+     // binaryTargets = ["native", "debian-openssl-1.1.x"] // Ensure engine matches Bun runtime
 }
 
 datasource db {
-  provider = "mongodb"
-  url      = env("DATABASE_URL")
+     provider = "postgresql"
+     url      = env("DATABASE_URL")
 }
 
-model files {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  apiKey         String
-  createdAt      DateTime @db.Date
-  extension      String
-  name           String
-  path           String
-  size           Int
-  softDelete     Boolean
-  type           String
-  updatedAt      DateTime @db.Date
-  uploadedByPath Boolean?
-
-  @@unique([name, path], map: "name_1_path_1")
-}
-
-model users {
-  id            String   @id @default(auto()) @map("_id") @db.ObjectId
-  apiKey        String
-  createdAt     DateTime @db.Date
-  email         String   @unique(map: "email_1")
-  name          String
-  password      String
-  plainPassword String
-  role          String
-  status        Boolean
-  updatedAt     DateTime @db.Date
-  username      String   @unique(map: "username_1")
+model File {
+     id        Int      @id @default(autoincrement())
+     name      String
+     createdAt DateTime @default(now())
 }
