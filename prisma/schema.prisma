@@ -1,7 +1,5 @@
 generator client {
-     provider      = "prisma-client-js"
-     binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
-     // binaryTargets = ["native", "debian-openssl-1.1.x"] // Ensure engine matches Bun runtime
+     provider = "prisma-client-js"
 }
 
 datasource db {
@@ -9,8 +7,55 @@ datasource db {
      url      = env("DATABASE_URL")
 }
 
-model File {
-     id        Int      @id @default(autoincrement())
-     name      String
-     createdAt DateTime @default(now())
+model Users {
+     id               Int         @id @default(autoincrement()) @db.Integer
+     username         String      @unique @db.VarChar(255)
+     email            String      @unique @db.VarChar(255)
+     password         String      @db.VarChar(255)
+     password_salt    String      @db.VarChar(255)
+     plain_password   String      @db.VarChar(255)
+     uploaded_by_path Boolean     @default(false) @db.Boolean
+     api_key          String      @unique @db.VarChar(255)
+     type_id          Int         @db.SmallInt
+     status_id        Int         @db.SmallInt
+     created_at       DateTime    @default(now()) @db.Timestamptz()
+     updated_at       DateTime?   @updatedAt @db.Timestamptz()
+     Status           User_Status @relation(fields: [status_id], references: [id])
+     Type             User_Type   @relation(fields: [type_id], references: [id])
+}
+
+model Metadata {
+     id         Int       @id @default(autoincrement()) @db.Integer
+     file_name  String    @db.Text
+     file_mime  String    @db.VarChar(60)
+     file_path  String    @db.Text
+     file_size  Int       @db.Integer
+     status_id  Int       @db.SmallInt
+     created_at DateTime  @default(now()) @db.Timestamptz()
+     updated_at DateTime? @updatedAt @db.Timestamptz()
+}
+
+// Regulatory Fields 
+
+model User_Status {
+     id         Int       @id @default(autoincrement()) @db.SmallInt
+     name       String    @db.VarChar(255)
+     created_at DateTime  @default(now()) @db.Timestamptz()
+     updated_at DateTime? @updatedAt @db.Timestamptz()
+     Users      Users[]
+}
+
+model User_Type {
+     id         Int       @id @default(autoincrement()) @db.SmallInt
+     name       String    @db.VarChar(255)
+     created_at DateTime  @default(now()) @db.Timestamptz()
+     updated_at DateTime? @updatedAt @db.Timestamptz()
+     Users      Users[]
+}
+
+model File_Status {
+     id         Int       @id @default(autoincrement()) @db.SmallInt
+     name       String    @db.VarChar(255)
+     created_at DateTime  @default(now()) @db.Timestamptz()
+     updated_at DateTime? @updatedAt @db.Timestamptz()
 }
