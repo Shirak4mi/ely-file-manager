@@ -1,5 +1,7 @@
 import {
   createFilePathIfDoesntExists,
+  extractAndSanitizeFileName,
+  extractAndSanitizePath,
   ensureTrailingSlash,
   returnActualOSPath,
   createFileOnsFS,
@@ -33,12 +35,12 @@ export default new Elysia().decorate("api_key", "" as string).post(
       const registerFile = await prisma.metadata.create({
         select: { file_path: true, file_name: true, file_mime: true, file_size: true },
         data: {
-          file_name: actualFile.name ?? "",
+          file_name: extractAndSanitizeFileName(actualFile.name ?? ""),
+          file_path: extractAndSanitizePath(totalFilePath),
           User: { connect: { api_key } },
           Status: { connect: { id: 1 } },
           file_mime: actualFile.type,
           file_size: actualFile.size,
-          file_path: totalFilePath,
         },
       });
 
