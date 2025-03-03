@@ -1,16 +1,8 @@
-// Type definitions
+/** A value that can be a string, number, boolean, or a nested object with MetaValue properties */
 type MetaValue = string | number | boolean | { [key: string]: MetaValue };
+
+/** An object with string keys and MetaValue values, allowing nested structures */
 type Meta = { [key: string]: MetaValue };
-
-/**
- * A value that can be a string, number, boolean, or nested object.
- * @typedef {string | number | boolean | { [key: string]: MetaValue }} MetaValue
- */
-
-/**
- * An object with string keys and MetaValue values.
- * @typedef {{ [key: string]: MetaValue }} Meta
- */
 
 /**
  * Normalizes text by trimming, lowercasing, and cleaning non-alphanumeric chars.
@@ -19,9 +11,7 @@ type Meta = { [key: string]: MetaValue };
  */
 function normalizeText(text: string | number | boolean): string {
   const str = typeof text !== "string" ? String(text) : text;
-  // Fast URL check with minimal indexing
   if (str[0] === "h" && (str[4] === ":" || str[5] === ":")) return str.trim();
-  // Single-pass cleanup
   return str
     .trim()
     .toLowerCase()
@@ -69,7 +59,7 @@ function toPascalCase(key: string): string {
 }
 
 /**
- * Formats metadata into aligned lines with nesting support.
+ * Formats metadata into aligned lines with nesting support, preserving "N/A" as-is.
  * @param {Meta} meta - Metadata object to format
  * @returns {string} - Formatted metadata string
  */
@@ -77,7 +67,7 @@ function formatMetaLines(meta: Meta): string {
   const lines: string[] = [];
   const keyLengths: Map<string, number> = new Map();
 
-  // Precompute key lengths in one pass
+  // Precompute key lengths
   function computeKeyLengths(obj: Meta): void {
     for (const key in obj) {
       const formattedKey = toPascalCase(key);
@@ -90,26 +80,26 @@ function formatMetaLines(meta: Meta): string {
   }
 
   computeKeyLengths(meta);
+
   const maxKeyLength = Math.max(...keyLengths.values()) || 0;
 
-  // Process entries with minimal overhead
+  // Process entries, skipping normalization for "N/A"
   function processEntry(key: string, value: MetaValue, indent: number): void {
     const formattedKey = toPascalCase(key);
     const padding = " ".repeat(maxKeyLength - formattedKey.length + 5);
     const indentStr = "  ".repeat(indent);
+
     if (typeof value === "object" && value !== null) {
       lines.push(indentStr + "~ " + formattedKey + ": [obj]");
-      for (const k in value as Meta) {
-        processEntry(k, (value as Meta)[k], indent + 1);
-      }
+      for (const k in value as Meta) processEntry(k, (value as Meta)[k], indent + 1);
     } else {
-      lines.push(indentStr + "~ " + formattedKey + ":" + padding + normalizeText(value));
+      const valueStr = value === "N/A" ? "N/A" : normalizeText(value);
+      lines.push(indentStr + "~ " + formattedKey + ":" + padding + valueStr);
     }
   }
 
-  for (const key in meta) {
-    processEntry(key, meta[key], 0);
-  }
+  for (const key in meta) processEntry(key, meta[key], 0);
+
   return lines.join("\n");
 }
 
@@ -122,28 +112,27 @@ function formatMetaLines(meta: Meta): string {
  * @returns {string} - Formatted log entry
  */
 export default function logEntry(timestamp: string, level: string, message: string, meta?: Meta): string {
-  const width = 75;
-
+  const width = 125;
   const separator = "═".repeat(width);
   const dashLine = "─".repeat(width);
 
   const lines: Array<string> = [
+    "\n",
     separator,
-    centerText(level.toUpperCase(), width),
+    centerText(level, width).toUpperCase(),
     centerText("[" + timestamp + "]", width),
     separator,
-    centerText("Message", width),
+    centerText("Message", width).toUpperCase(),
     dashLine,
   ];
 
-  // Single-pass message splitting and centering
   const messageLines = message.split("\n");
 
   for (let i = 0; i < messageLines.length; i++) lines.push(centerText(messageLines[i].trim(), width));
 
-  // Append metadata if present
-  if (meta) lines.push("", centerText("Metadata", width), dashLine, formatMetaLines(meta));
+  if (meta) lines.push("", centerText("Metadata", width).toUpperCase(), dashLine, formatMetaLines(meta));
 
   lines.push(separator, "", "");
+  lines.push("\n\n\n");
   return lines.join("\n");
 }
