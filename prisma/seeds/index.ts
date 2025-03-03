@@ -31,6 +31,7 @@ async function main() {
       Status: { connect: { id: 1 } },
       Type: { connect: { id: 3 } },
       api_key: generateNanoID(30),
+      updated_at: null,
       password_salt,
     },
   });
