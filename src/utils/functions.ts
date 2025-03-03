@@ -366,11 +366,10 @@ export function generateToken(): string {
  * const hashedPassword = await encryptPassword(salt, "mySecurePassword");
  */
 export function encryptPassword(salt: string, pass: string): Promise<string> {
-  console.log({ salt, pass });
-  return password.hash(salt + pass, { algorithm: "argon2id" });
+  return password.hash(salt + pass, { algorithm: "argon2d" });
 }
 
-export { default as generateNanoID } from "./nanoID/index.ts";
 export { default as HyperScalePathResolver } from "./HyperCache/index.ts";
+export { default as generateNanoID } from "./nanoID/index.ts";
 export * from "./logger/index.ts";
 export * from "./ip/index.ts";
