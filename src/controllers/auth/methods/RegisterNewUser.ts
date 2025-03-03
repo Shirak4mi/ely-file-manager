@@ -1,12 +1,12 @@
 import { encryptPassword, generateNanoID, generateRandomSalt } from "@/utils/functions";
+import { InternalServerErrorException } from "@/utils/error";
 import { CreateUserDTO } from "../dto";
 import { prisma } from "@/db";
 
 import { Elysia } from "elysia";
-import { InternalServerErrorException } from "@/utils/error";
 
 export default new Elysia().post(
-  "Login",
+  "Register",
   async ({ body: { username, email, password, type } }) => {
     try {
       const password_salt = generateRandomSalt();
@@ -27,7 +27,7 @@ export default new Elysia().post(
       });
 
       if (!newUser) throw new InternalServerErrorException("Could not create User, please try again");
-      
+
       return newUser;
     } catch (err) {
       console.error(err);
