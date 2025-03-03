@@ -11,42 +11,16 @@ export default new Elysia().decorate("api_key", "" as string).get(
     try {
       const validFilePath = await getWorkingFilePath(decodeURIComponent(path));
       const actualFile = bFile(validFilePath ?? "");
-      const cntnLength: string = (actualFile.length as number).toString();
+
+      const fileSize: string = (actualFile.size ?? 0).toString();
 
       const contentType = actualFile.type || "application/octet-stream";
 
       set.headers["Content-disposition"] = inline ? `inline` : `attachment; filename="${actualFile.type}"`;
-      set.headers["Content-length"] = cntnLength;
+      set.headers["Content-length"] = fileSize;
       set.headers["Content-Type"] = contentType;
 
-      const requestedBy = await prisma.users.findFirst({
-        select: { id: true, username: true, email: true },
-        where: { api_key },
-      });
-
-      const requestedToken =
-        req.headers.get("authorization") !== null ? (req.headers.get("authorization") ?? " ").split(" ")[1] : "N/A";
-
-      logger("INFO", "GET ONE FILE BY PATH", {
-        requestedBy,
-        requestIpFrom: convertIPv6ToIPv4(server ? server.requestIP.toString() : "N/A"),
-        requestUserAgent: req.headers.get("user-agent"),
-        requestedResource: req.method,
-        requestPath: req.url,
-        Method: req.method,
-        requestedData: {
-          file: {
-            extension: getFileExtension(actualFile.name ?? ""),
-            size: (await actualFile.stat()).size,
-            type: actualFile.type,
-            name: actualFile.name,
-          },
-        },
-        requestedToken,
-        requestStatus: 200,
-        requestAt: new Date(),
-        response: { message: ["File retrieved successfully"], statusCode: 200 },
-      });
+      console.log({ fileSize });
 
       return actualFile;
     } catch (err) {
@@ -56,3 +30,5 @@ export default new Elysia().decorate("api_key", "" as string).get(
   },
   { params: CommonPathBasedToken, query: InlineQueryDTO }
 );
+
+// 'http://localhost:3000/api/Files/get-one-by-path/%2FFLAV-358%20-%20Tsukasa%20Nagano.mp4?inline=true'
