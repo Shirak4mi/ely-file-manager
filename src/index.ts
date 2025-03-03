@@ -26,3 +26,5 @@ new Elysia({ name: "Storage Manager API", strictPath: true, precompile: true, se
   .use(helmetExec)
   .use(routes)
   .listen(api_base_port ?? 8080, ({ url }) => console.log(`🦊 Elisya is Running on ${url}`));
+
+  

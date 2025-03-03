@@ -12,6 +12,8 @@
     "@prisma/client": "6.4.1",
     "elysia": "latest",
     "elysia-helmet": "^2.0.0",
+    "arctic": "^3.4.0",
+    "oslo": "^1.2.1",
     "logestic": "^1.2.4",
     "zod": "^3.24.2"
   },
