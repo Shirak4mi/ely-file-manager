@@ -12,10 +12,6 @@ fi
 echo "Setting permissions for /opt/storage..."
 sudo chmod 777 /opt/storage
 
-# Create local folders for Docker volumes
-echo "Creating local folders for Docker volumes..."
-mkdir -p ./uploads ./metadata ./files_to_manage
-
 # Clean up any existing containers
 echo "Cleaning up existing containers..."
 docker-compose down -v
