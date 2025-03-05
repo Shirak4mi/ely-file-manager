@@ -27,9 +27,6 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
-# Create necessary directories
-RUN mkdir -p /app/uploads /app/metadata /app/files_to_manage
-
 # Create entrypoint script
 RUN echo '#!/bin/sh\nbunx prisma migrate dev reset --force\nbunx prisma db seed\nexec bun dev' > /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh

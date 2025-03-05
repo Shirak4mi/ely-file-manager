@@ -30,10 +30,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./uploads:/app/uploads
-      - ./metadata:/app/metadata
-      - ./files_to_manage:/app/files_to_manage
-      - /opt/storage:/opt/storage # This is the key change
+      - /opt/storage:/opt/storage 
     environment:
       - SALT=10
       - PORT=3000
