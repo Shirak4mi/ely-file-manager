@@ -245,7 +245,7 @@ export function returnActualOSPath(path: string): string {
     const char = input[i];
     result += char === "/" ? "\\" : char;
   }
-  
+
   return result;
 }
 
@@ -488,6 +488,37 @@ export function extractAndSanitizeFileName(filepath: string): string {
   }
 
   return result || filepath; // Fallback to full path if no separators
+}
+
+/**
+ * Extracts the path and filename from a full filepath, with sanitization.
+ * Optimized for speed: single-pass parsing, no regex, minimal allocations.
+ *
+ * @param {string} filepath - Full filepath (e.g., "/logs/my file.txt" or "C:\\logs\\my file.txt")
+ * @returns {Object} Object containing sanitized path and filename
+ * @throws {Error} If filepath is empty or invalid
+ */
+export function parseFilePath(filepath: string): { path: string; filename: string } {
+  if (!filepath) throw new Error("Filepath cannot be empty");
+
+  const len = filepath.length;
+  let start = len - 1;
+
+  // Find last separator (/ or \) in one reverse pass
+  while (start >= 0 && filepath[start] !== "/" && filepath[start] !== "\\") start--;
+
+  // Extract path and filename
+  const path = start >= 0 ? filepath.slice(0, start + 1) : "";
+  const rawFilename = start >= 0 ? filepath.slice(start + 1) : filepath;
+
+  // Sanitize filename
+  let sanitizedFilename = "";
+  for (let i = 0; i < rawFilename.length; i++) {
+    const char = rawFilename[i];
+    sanitizedFilename += char === " " ? "_" : char;
+  }
+
+  return { path, filename: sanitizedFilename || rawFilename };
 }
 
 /**

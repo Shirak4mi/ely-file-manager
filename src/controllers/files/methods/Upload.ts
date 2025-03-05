@@ -5,6 +5,7 @@ import {
   ensureTrailingSlash,
   returnActualOSPath,
   createFileOnsFS,
+  parseFilePath,
 } from "@/utils/functions.ts";
 import { ImATeapotException } from "@/utils/error";
 import { FileUploadDTO } from "@/common/dto's";
@@ -24,6 +25,8 @@ export default new Elysia().decorate("api_key", "" as string).post(
 
       const totalFilePath = returnActualOSPath(ensureTrailingSlash(path) + file.name);
       const actualFile = bFile(totalFilePath ?? "");
+
+      console.log(parseFilePath(totalFilePath));
 
       // Actual File MetaData
       const file_size = actualFile.size;

@@ -14,8 +14,4 @@ export const CommonFileBasedResponse = t.Object({ 200: t.File() });
 
 export const InlineQueryDTO = t.Object({ inline: t.Boolean({ default: false }) });
 
-export const FileUploadDTO = t.Object({
-  file: t.File(),
-  path: t.String({ minLength: 1 }),
-  apiKey: t.Optional(t.String({ minLength: 1 })),
-});
+export const FileUploadDTO = t.Object({ file: t.File(), path: t.String({ minLength: 1 }) });
