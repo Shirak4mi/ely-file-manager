@@ -5,8 +5,8 @@ import {
   ensureTrailingSlash,
   returnActualOSPath,
   createFileOnsFS,
-  parseFilePath,
 } from "@/utils/functions.ts";
+import { parsePathComprehensive } from "@/utils/path";
 import { ImATeapotException } from "@/utils/error";
 import { FileUploadDTO } from "@/common/dto's";
 import { file as bFile } from "bun";
@@ -18,15 +18,22 @@ export default new Elysia().decorate("api_key", "" as string).post(
   "upload",
   async ({ body: { path, file }, api_key }) => {
     try {
+      const totalFilePath = returnActualOSPath(ensureTrailingSlash(path) + file.name);
+
+      const parsed = parsePathComprehensive(path + file.name, { ensureTrailingSlash: true });
+
+      console.log({ parsed });
+
+      // const existsExactOnDiskAlready = await prisma.metadata.findFirst({ where: { file_name: file.name } });
+
       const workingFP = await createFilePathIfDoesntExists(path);
       const createdFile = await createFileOnsFS(workingFP, file);
 
       if (!createdFile) throw new ImATeapotException("There was an error uploading the file");
 
-      const totalFilePath = returnActualOSPath(ensureTrailingSlash(path) + file.name);
       const actualFile = bFile(totalFilePath ?? "");
 
-      console.log(parseFilePath(totalFilePath));
+      // console.log(parseFilePath(totalFilePath), totalFilePath);
 
       // Actual File MetaData
       const file_size = actualFile.size;

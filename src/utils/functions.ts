@@ -421,6 +421,67 @@ export function generateToken(): string {
 }
 
 /**
+ * Ultrafast file path parser with minimal allocations
+ * Ensures path always ends with a trailing slash
+ */
+export function fastParsePath(filepath: string): {
+  path: string;
+  file_name: string;
+  file_type: string;
+} {
+  const len = filepath.length;
+  if (len === 0) throw new Error("Filepath cannot be empty");
+
+  let pathEnd = len,
+    extStart = len,
+    nameStart = len;
+
+  // Single reverse pass to find separators and extension
+  for (let i = len - 1; i >= 0; i--) {
+    const char = filepath.charCodeAt(i);
+
+    // Check for path separators (/ or \)
+    if (char === 47 || char === 92) {
+      pathEnd = i + 1;
+      break;
+    }
+
+    // Find extension start
+    if (char === 46 && extStart === len) {
+      // .
+      extStart = i;
+      nameStart = i;
+    }
+  }
+
+  // Adjust nameStart if no explicit extension found
+  if (nameStart === len) nameStart = pathEnd;
+
+  // Path extraction with guaranteed trailing slash
+  const rawPath = filepath.slice(0, pathEnd);
+  const path = rawPath.endsWith("/") || rawPath.endsWith("\\") ? rawPath : rawPath + "/";
+
+  // Filename sanitization
+  let sanitizedName = "";
+  for (let i = nameStart; i < extStart; i++) {
+    const char = filepath.charCodeAt(i);
+    sanitizedName += char === 32 ? "_" : String.fromCharCode(char);
+  }
+
+  // File type extraction
+  const file_type = extStart < len ? filepath.slice(extStart + 1).toLowerCase() : "";
+
+  // Reconstruct filename with extension
+  const file_name = file_type ? `${sanitizedName}.${file_type}` : sanitizedName;
+
+  return {
+    path,
+    file_name,
+    file_type,
+  };
+}
+
+/**
  * Encrypts a password using Argon2id hashing algorithm with a provided salt.
  *
  * @param salt - A unique string to be prepended to the password before hashing.
