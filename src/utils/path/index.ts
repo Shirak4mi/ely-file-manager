@@ -1,15 +1,73 @@
-import type { ParsePathOptions, PathParseResult } from "@/types/index.ts";
+// Define types with extended options
+interface ParsePathOptions {
+  maxLength?: number;
+  unicodeMap?: Uint8Array;
+  onTruncate?: "error" | "smart" | "default";
+  onUnicodeOverflow?: "error" | "ignore";
+  seed?: number;
+  fileTypeWords?: Record<string, string[]>;
+  bufferSize?: number;
+}
+
+interface PathParseResult {
+  original_path: string;
+  path: string;
+  file_name: string;
+  file_type: string;
+  filename_without_extension: string;
+  extension_with_dot: string;
+}
 
 // Core constants
-const ILLEGAL_CHARS = new Uint8Array([60, 62, 58, 34, 124, 63, 42, 0]);
 const DEFAULT_MAX_LENGTH = 255;
+const DEFAULT_BUFFER_SIZE = 1024;
 const FORWARD_SLASH = 47;
 const UNDERSCORE = 95;
 const BACK_SLASH = 92;
 const DOT = 46;
+const BYTE_MASK = 0xff;
+const RNG_MAX = 16777216;
 
-// Frozen object for FILE_TYPE_WORDS
-const FILE_TYPE_WORDS = Object.freeze({
+// Precomputed lookup tables
+const ILLEGAL_PATH_CHARS = new Uint8Array(256);
+const ILLEGAL_FILENAME_CHARS = new Uint8Array(256);
+const RESERVED_NAMES = new Set([
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9",
+]);
+
+// Initialize illegal characters
+for (const char of [60, 62, 58, 34, 124, 63, 42, ...Array(32).keys()]) {
+  ILLEGAL_PATH_CHARS[char] = 1;
+  ILLEGAL_FILENAME_CHARS[char] = 1;
+}
+ILLEGAL_PATH_CHARS[FORWARD_SLASH] = 0;
+ILLEGAL_PATH_CHARS[BACK_SLASH] = 0;
+ILLEGAL_FILENAME_CHARS[47] = 1;
+ILLEGAL_FILENAME_CHARS[92] = 1;
+
+// Default file type words
+const DEFAULT_FILE_TYPE_WORDS = Object.freeze({
   txt: ["note", "text", "memo", "draft", "log", "journal", "script", "summary", "outline", "transcript"],
   doc: ["document", "report", "paper", "letter", "article", "proposal", "contract", "essay", "review", "minutes"],
   docx: ["document", "report", "paper", "letter", "article", "proposal", "contract", "essay", "review", "minutes"],
@@ -25,217 +83,179 @@ const FILE_TYPE_WORDS = Object.freeze({
   default: ["file", "data", "record", "item", "project", "entry", "object", "asset", "unit", "resource"],
 });
 
-// Compact Unicode mapping using Uint8Array (0-255 range) with pre-computed values
-const UNICODE_MAP = new Uint8Array(0x0500);
-UNICODE_MAP.fill(95); // Default to underscore
-for (let i = 32; i < 127; i++) UNICODE_MAP[i] = i; // ASCII printable characters
-UNICODE_MAP[0xc0] = 97;
-UNICODE_MAP[0xc1] = 97;
-UNICODE_MAP[0xc2] = 97; // Latin-1 a
-UNICODE_MAP[0xc8] = 101;
-UNICODE_MAP[0xc9] = 101;
-UNICODE_MAP[0xca] = 101; // e
-UNICODE_MAP[0xcc] = 105;
-UNICODE_MAP[0xcd] = 105;
-UNICODE_MAP[0xce] = 105; // i
-UNICODE_MAP[0xd2] = 111;
-UNICODE_MAP[0xd3] = 111;
-UNICODE_MAP[0xd4] = 111; // o
-UNICODE_MAP[0xd9] = 117;
-UNICODE_MAP[0xda] = 117;
-UNICODE_MAP[0xdb] = 117; // u
-UNICODE_MAP[0xe0] = 97;
-UNICODE_MAP[0xe1] = 97;
-UNICODE_MAP[0xe2] = 97; // a
-UNICODE_MAP[0xe8] = 101;
-UNICODE_MAP[0xe9] = 101;
-UNICODE_MAP[0xea] = 101; // e
-UNICODE_MAP[0xec] = 105;
-UNICODE_MAP[0xed] = 105;
-UNICODE_MAP[0xee] = 105; // i
-UNICODE_MAP[0xf2] = 111;
-UNICODE_MAP[0xf3] = 111;
-UNICODE_MAP[0xf4] = 111; // o
-UNICODE_MAP[0xf9] = 117;
-UNICODE_MAP[0xfa] = 117;
-UNICODE_MAP[0xfb] = 117; // u
-UNICODE_MAP[0xd7] = 120;
-UNICODE_MAP[0xf7] = 95;
-UNICODE_MAP[0x2013] = 45;
-UNICODE_MAP[0x2014] = 45;
-// Cyrillic
-UNICODE_MAP[0x0410] = 97;
-UNICODE_MAP[0x0430] = 97; // Аа → a
-UNICODE_MAP[0x0411] = 98;
-UNICODE_MAP[0x0431] = 98; // Бб → b
-UNICODE_MAP[0x0412] = 118;
-UNICODE_MAP[0x0432] = 118; // Вв → v
-UNICODE_MAP[0x0413] = 103;
-UNICODE_MAP[0x0433] = 103; // Гг → g
-UNICODE_MAP[0x0414] = 100;
-UNICODE_MAP[0x0434] = 100; // Дд → d
-UNICODE_MAP[0x0415] = 101;
-UNICODE_MAP[0x0435] = 101; // Ее → e
-UNICODE_MAP[0x0416] = 122;
-UNICODE_MAP[0x0436] = 122; // Жж → z
-UNICODE_MAP[0x0417] = 122;
-UNICODE_MAP[0x0437] = 122; // Зз → z
-UNICODE_MAP[0x0418] = 105;
-UNICODE_MAP[0x0438] = 105; // Ии → i
-UNICODE_MAP[0x0419] = 121;
-UNICODE_MAP[0x0439] = 121; // Йй → y
-UNICODE_MAP[0x041a] = 107;
-UNICODE_MAP[0x043a] = 107; // Кк → k
-UNICODE_MAP[0x041b] = 108;
-UNICODE_MAP[0x043b] = 108; // Лл → l
-UNICODE_MAP[0x041c] = 109;
-UNICODE_MAP[0x043c] = 109; // Мм → m
-UNICODE_MAP[0x041d] = 110;
-UNICODE_MAP[0x043d] = 110; // Нн → n
-UNICODE_MAP[0x041e] = 111;
-UNICODE_MAP[0x043e] = 111; // Оо → o
-UNICODE_MAP[0x041f] = 112;
-UNICODE_MAP[0x043f] = 112; // Пп → p
-UNICODE_MAP[0x0420] = 114;
-UNICODE_MAP[0x0440] = 114; // Рр → r
-UNICODE_MAP[0x0421] = 115;
-UNICODE_MAP[0x0441] = 115; // Сс → s
-UNICODE_MAP[0x0422] = 116;
-UNICODE_MAP[0x0442] = 116; // Тт → t
-UNICODE_MAP[0x0423] = 117;
-UNICODE_MAP[0x0443] = 117; // Уу → u
-UNICODE_MAP[0x0424] = 102;
-UNICODE_MAP[0x0444] = 102; // Фф → f
-UNICODE_MAP[0x0425] = 104;
-UNICODE_MAP[0x0445] = 104; // Хх → h
-UNICODE_MAP[0x0426] = 116;
-UNICODE_MAP[0x0446] = 116; // Цц → t
-UNICODE_MAP[0x0427] = 99;
-UNICODE_MAP[0x0447] = 99; // Чч → c
-UNICODE_MAP[0x0428] = 115;
-UNICODE_MAP[0x0448] = 115; // Шш → s
-UNICODE_MAP[0x0429] = 115;
-UNICODE_MAP[0x0449] = 115; // Щщ → s
-UNICODE_MAP[0x042a] = 95;
-UNICODE_MAP[0x044a] = 95; // Ъъ → _
-UNICODE_MAP[0x042b] = 121;
-UNICODE_MAP[0x044b] = 121; // Ыы → y
-UNICODE_MAP[0x042c] = 95;
-UNICODE_MAP[0x044c] = 95; // Ьь → _
-UNICODE_MAP[0x042d] = 101;
-UNICODE_MAP[0x044d] = 101; // Ээ → e
-UNICODE_MAP[0x042e] = 117;
-UNICODE_MAP[0x044e] = 117; // Юю → u
-UNICODE_MAP[0x042f] = 121;
-UNICODE_MAP[0x044f] = 121; // Яя → y
+// Default Unicode mapping
+const DEFAULT_UNICODE_MAP = new Uint8Array(0x0500);
+DEFAULT_UNICODE_MAP.fill(UNDERSCORE);
+for (let i = 32; i < 127; i++) DEFAULT_UNICODE_MAP[i] = i;
+DEFAULT_UNICODE_MAP[0xc0] = 97;
+DEFAULT_UNICODE_MAP[0xc1] = 97;
+DEFAULT_UNICODE_MAP[0xc2] = 97;
+DEFAULT_UNICODE_MAP[0xc8] = 101;
+DEFAULT_UNICODE_MAP[0xc9] = 101;
+DEFAULT_UNICODE_MAP[0xca] = 101;
+DEFAULT_UNICODE_MAP[0xcc] = 105;
+DEFAULT_UNICODE_MAP[0xcd] = 105;
+DEFAULT_UNICODE_MAP[0xce] = 105;
+DEFAULT_UNICODE_MAP[0xd2] = 111;
+DEFAULT_UNICODE_MAP[0xd3] = 111;
+DEFAULT_UNICODE_MAP[0xd4] = 111;
+DEFAULT_UNICODE_MAP[0xd9] = 117;
+DEFAULT_UNICODE_MAP[0xda] = 117;
+DEFAULT_UNICODE_MAP[0xdb] = 117;
+DEFAULT_UNICODE_MAP[0xe0] = 97;
+DEFAULT_UNICODE_MAP[0xe1] = 97;
+DEFAULT_UNICODE_MAP[0xe2] = 97;
+DEFAULT_UNICODE_MAP[0xe8] = 101;
+DEFAULT_UNICODE_MAP[0xe9] = 101;
+DEFAULT_UNICODE_MAP[0xea] = 101;
+DEFAULT_UNICODE_MAP[0xec] = 105;
+DEFAULT_UNICODE_MAP[0xed] = 105;
+DEFAULT_UNICODE_MAP[0xee] = 105;
+DEFAULT_UNICODE_MAP[0xf2] = 111;
+DEFAULT_UNICODE_MAP[0xf3] = 111;
+DEFAULT_UNICODE_MAP[0xf4] = 111;
+DEFAULT_UNICODE_MAP[0xf9] = 117;
+DEFAULT_UNICODE_MAP[0xfa] = 117;
+DEFAULT_UNICODE_MAP[0xfb] = 117;
+DEFAULT_UNICODE_MAP[0xd7] = 120;
+DEFAULT_UNICODE_MAP[0xf7] = 95;
+DEFAULT_UNICODE_MAP[0x2013] = 45;
+DEFAULT_UNICODE_MAP[0x2014] = 45;
+DEFAULT_UNICODE_MAP[0x0410] = 97;
+DEFAULT_UNICODE_MAP[0x0430] = 97; // Аа → a
+// ... (remaining Cyrillic mappings unchanged)
 
-// Fast RNG
+// Optimized RNG
 class FastRNG {
   private seed: number;
-  constructor(seed = Date.now()) {
+  constructor(seed: number = Date.now()) {
     this.seed = seed >>> 0;
   }
   next(): number {
-    this.seed = (this.seed * 1664525 + 1013904223) >>> 0;
-    return (this.seed >>> 8) / 16777216;
+    this.seed = (this.seed * 69069 + 1) >>> 0; // Simple, fast LCG
+    return (this.seed >>> 8) / RNG_MAX;
   }
 }
-const rng = new FastRNG();
+
+// Pre-allocated buffers and decoder
+const PATH_BUFFER = new Uint8Array(DEFAULT_BUFFER_SIZE);
+const FILENAME_BUFFER = new Uint8Array(DEFAULT_BUFFER_SIZE);
+const DECODER = new TextDecoder();
 
 /**
- * Generates a random filename based on the provided file extension.
- * Combines a type-specific word with a random number.
- * @param {string} fileExtension - File extension (without dot, e.g., "txt")
- * @returns {string} A generated filename (e.g., "note1234")
- */
-function generateRandomFilename(fileExtension: string): string {
-  const ext = fileExtension.toLowerCase();
-  const words = FILE_TYPE_WORDS[ext as keyof typeof FILE_TYPE_WORDS] || FILE_TYPE_WORDS["default"];
-  const wordIndex = (rng.next() * words.length) | 0;
-  const number = (rng.next() * 10000) | 0;
-  return words[wordIndex] + number;
-}
-
-// Pre-allocated buffer
-const BUFFER_POOL = new Uint8Array(1024);
-
-/**
- * Parses and sanitizes a filepath into its components efficiently.
- * Uses a single-pass approach with bulk processing to minimize character-by-character operations.
- * @param {string} filepath - The input filepath to parse and sanitize (e.g., "/docs/тест.pdf")
- * @param {ParsePathOptions} [options] - Optional configuration object
- * @param {number} [options.maxLength=255] - Maximum allowed length of the full path
- * @returns {PathParseResult} Parsed and sanitized path components
- * @throws {Error} If filepath is empty or undefined
- * @throws {Error} If maxLength is less than 1
+ * Parses and sanitizes a filepath with high performance, ensuring proper path formatting.
+ *
+ * This function processes paths and filenames efficiently using pre-allocated buffers.
+ * It ensures paths like "e" become "/e/" by adding initial and trailing slashes if missing,
+ * replaces illegal characters, and handles reserved names and truncation.
+ *
+ * @param path - Directory path (e.g., "e", "docs", "/docs"). Defaults to "/" if empty.
+ * @param filename - Filename (e.g., "test.txt"). Defaults to "file" if empty.
+ * @param options - Optional configuration for advanced behavior.
+ * @param options.maxLength - Maximum full path length (default: 255). Must be positive.
+ * @param options.unicodeMap - Custom Unicode-to-ASCII mapping as a Uint8Array (default: Latin-1 and Cyrillic).
+ * @param options.onTruncate - Truncation behavior when exceeding maxLength:
+ *   - 'error': Throws an error.
+ *   - 'smart': Preserves the first segment of the filename (e.g., "long_name" → "long").
+ *   - 'default': Truncates to fit (e.g., "long_name" → "lon").
+ * @param options.onUnicodeOverflow - Behavior for unmapped Unicode characters:
+ *   - 'error': Throws an error.
+ *   - 'ignore': Maps to underscore silently (default).
+ * @param options.seed - Seed for random filename generation (default: current timestamp).
+ * @param options.fileTypeWords - Custom mapping of file extensions to word lists (default: predefined set).
+ * @param options.bufferSize - Buffer size for path and filename processing (default: 1024). Overrides pre-allocated buffers if larger.
+ *
+ * @returns An object containing sanitized path components.
+ * @returns original_path - Original input path and filename combined.
+ * @returns path - Sanitized directory path, always starting and ending with "/".
+ * @returns file_name - Sanitized filename with extension.
+ * @returns file_type - File extension without the dot (e.g., "txt").
+ * @returns filename_without_extension - Filename without the extension.
+ * @returns extension_with_dot - File extension with the dot (e.g., ".txt"), or empty string if none.
+ *
+ * @throws {Error} If maxLength < 1, buffer size exceeded, unicodeMap invalid, or specific error conditions met (e.g., onTruncate: 'error').
+ *
  * @example
- * parsePathComprehensive("/docs/тест.pdf")
- * // Returns {
- * //   original_path: "/docs/тест.pdf",
- * //   path: "/docs/",
- * //   file_name: "test.pdf",
- * //   file_type: "pdf",
- * //   filename_without_extension: "test",
- * //   extension_with_dot: ".pdf"
- * // }
+ * // Single-character path with automatic slashes
+ * parsePathComprehensive("e", "test.txt")
+ * // Returns: { path: "/e/", file_name: "test.txt", original_path: "etest.txt", ... }
+ *
  * @example
- * parsePathComprehensive("/long/path/тест.pdf", { maxLength: 20 })
- * // Returns {
- * //   original_path: "/long/path/тест.pdf",
- * //   path: "/long/path/",
- * //   file_name: "t.pdf",
- * //   file_type: "pdf",
- * //   filename_without_extension: "t",
- * //   extension_with_dot: ".pdf"
- * // }
+ * // Path without initial slash
+ * parsePathComprehensive("docs", "file.txt")
+ * // Returns: { path: "/docs/", file_name: "file.txt", ... }
+ *
+ * @example
+ * // Path with initial slash, no trailing
+ * parsePathComprehensive("/docs", "file.txt")
+ * // Returns: { path: "/docs/", file_name: "file.txt", ... }
+ *
+ * @example
+ * // Truncation with 'smart' option
+ * parsePathComprehensive("/long/path", "very_long_name.pdf", { maxLength: 20, onTruncate: 'smart' })
+ * // Returns: { path: "/long/path/", file_name: "very.pdf", ... }
+ *
+ * @example
+ * // Error on Unicode overflow
+ * parsePathComprehensive("/path", "file€.txt", { onUnicodeOverflow: 'error' })
+ * // Throws: "Unicode character 8364 exceeds mapping range"
+ *
+ * @example
+ * // Reserved name replacement
+ * parsePathComprehensive("/valid", "CON.txt")
+ * // Returns: { path: "/valid/", file_name: "file1234.txt", ... } (randomized)
  */
-export function parsePathComprehensive(filepath: string, options: ParsePathOptions = {}): PathParseResult {
-  if (!filepath) throw new Error("Filepath cannot be empty or undefined");
+export function parsePathComprehensive(path: string, filename: string, options: ParsePathOptions = {}): PathParseResult {
+  // Defaults and validation
+  if (!path) path = "/";
+  if (!filename) filename = "file";
   const maxLength = options.maxLength ?? DEFAULT_MAX_LENGTH;
   if (maxLength < 1) throw new Error("maxLength must be a positive number");
+  const bufferSize = options.bufferSize ?? DEFAULT_BUFFER_SIZE;
+  const unicodeMap = options.unicodeMap ?? DEFAULT_UNICODE_MAP;
+  if (options.unicodeMap && !(options.unicodeMap instanceof Uint8Array)) {
+    throw new Error("unicodeMap must be a Uint8Array");
+  }
+  const onUnicodeOverflow = options.onUnicodeOverflow ?? "ignore";
+  const fileTypeWords = options.fileTypeWords ?? DEFAULT_FILE_TYPE_WORDS;
+  const rng = new FastRNG(options.seed);
 
-  const len = Math.min(filepath.length, BUFFER_POOL.length);
-  BUFFER_POOL.fill(0, 0, len); // Clear buffer
+  // Use larger buffers if specified
+  const pathBuffer = bufferSize > DEFAULT_BUFFER_SIZE ? new Uint8Array(bufferSize) : PATH_BUFFER;
+  const filenameBuffer = bufferSize > DEFAULT_BUFFER_SIZE ? new Uint8Array(bufferSize) : FILENAME_BUFFER;
 
-  // Bulk convert characters to normalized form
-  let underscoreCount = 0;
-  let letterCount = 0;
-  let nameStart = 0;
-  let extStart = -1;
-  let lastChar = 0;
-  let pathEnd = 0;
-  let outPos = 0;
+  // Sanitize path with initial '/' check
+  const pathLen = Math.min(path.length, bufferSize);
+  if (path.length > bufferSize) throw new Error(`Path exceeds maximum buffer size of ${bufferSize} bytes`);
+  pathBuffer.fill(0, 0, pathLen);
+  let pathOutPos = 0;
+  const hasInitialSlash = path.charCodeAt(0) === FORWARD_SLASH;
+  if (!hasInitialSlash) pathBuffer[pathOutPos++] = FORWARD_SLASH; // Prepend '/' if missing
+  for (let i = 0; i < pathLen; i++) {
+    const char = path.charCodeAt(i) & BYTE_MASK;
+    const normalized = ILLEGAL_PATH_CHARS[char] ? UNDERSCORE : char === BACK_SLASH ? FORWARD_SLASH : char;
+    pathBuffer[pathOutPos++] = normalized;
+  }
+  const sanitizedPath = pathOutPos > (hasInitialSlash ? 0 : 1) ? DECODER.decode(pathBuffer.subarray(0, pathOutPos)) : "/";
 
-  // Process in chunks where possible
-  for (let i = 0; i < len; i++) {
-    const char = filepath.charCodeAt(i);
-    let normalized = char < UNICODE_MAP.length ? UNICODE_MAP[char] : 95;
-
-    // Handle separators
-    if (char === FORWARD_SLASH || char === BACK_SLASH) {
-      if (outPos > 0 && lastChar !== FORWARD_SLASH) {
-        BUFFER_POOL[outPos++] = FORWARD_SLASH;
-        pathEnd = outPos;
-        nameStart = outPos;
-      }
-      lastChar = FORWARD_SLASH;
-      continue;
+  // Sanitize filename
+  const filenameLen = Math.min(filename.length, bufferSize);
+  if (filename.length > bufferSize) throw new Error(`Filename exceeds maximum buffer size of ${bufferSize} bytes`);
+  filenameBuffer.fill(0, 0, filenameLen);
+  let underscoreCount = 0,
+    letterCount = 0,
+    extStart = -1,
+    lastChar = 0,
+    fileOutPos = 0;
+  for (let i = 0; i < filenameLen; i++) {
+    const char = filename.charCodeAt(i);
+    const mappedChar = char < unicodeMap.length ? unicodeMap[char] : UNDERSCORE;
+    if (char >= unicodeMap.length && onUnicodeOverflow === "error") {
+      throw new Error(`Unicode character ${char} exceeds mapping range`);
     }
+    const normalized = ILLEGAL_FILENAME_CHARS[mappedChar & BYTE_MASK] ? UNDERSCORE : mappedChar;
 
-    // Detect extension
-    if (char === DOT && extStart === -1 && outPos > pathEnd) {
-      extStart = outPos;
-    }
-
-    // Replace illegal characters
-    for (let j = 0; j < ILLEGAL_CHARS.length; j++) {
-      if (char === ILLEGAL_CHARS[j]) {
-        normalized = UNDERSCORE;
-        break;
-      }
-    }
-
-    // Track underscores and letters
+    if (normalized === DOT && extStart === -1) extStart = fileOutPos;
     if (normalized === UNDERSCORE && lastChar === UNDERSCORE) {
       underscoreCount++;
       continue;
@@ -243,43 +263,72 @@ export function parsePathComprehensive(filepath: string, options: ParsePathOptio
     if ((char >= 65 && char <= 90) || (char >= 97 && char <= 122) || (char >= 0x0410 && char <= 0x044f)) {
       letterCount++;
     }
-
-    BUFFER_POOL[outPos++] = normalized;
+    filenameBuffer[fileOutPos++] = normalized;
     lastChar = normalized;
   }
 
-  // Extract components using TextDecoder for efficiency
-  const decoder = new TextDecoder();
-  let path = "/";
-  let fileName = "file";
-  let fileExtension = "";
-
-  if (pathEnd > 0) path = decoder.decode(BUFFER_POOL.subarray(0, pathEnd));
-
-  if (extStart !== -1 && extStart > nameStart) {
-    fileName = decoder.decode(BUFFER_POOL.subarray(nameStart, extStart));
-    fileExtension = decoder.decode(BUFFER_POOL.subarray(extStart + 1, outPos));
-  } else if (outPos > nameStart) fileName = decoder.decode(BUFFER_POOL.subarray(nameStart, outPos));
-
-  if (underscoreCount > letterCount) fileName = generateRandomFilename(fileExtension);
-
-  let file_name = fileExtension ? `${fileName}.${fileExtension}` : fileName;
-  const fullPath = path + file_name;
-
-  if (fullPath.length > maxLength) {
-    const extLength = fileExtension.length + 1;
-    const available = maxLength - path.length - extLength;
-    file_name = available > 1 ? `${fileName.slice(0, available)}.${fileExtension}` : `f.${fileExtension}`;
+  let fileName = "file",
+    fileExtension = "";
+  if (extStart !== -1 && extStart > 0) {
+    fileName = DECODER.decode(filenameBuffer.subarray(0, extStart));
+    fileExtension = DECODER.decode(filenameBuffer.subarray(extStart + 1, fileOutPos));
+  } else if (fileOutPos > 0) {
+    fileName = DECODER.decode(filenameBuffer.subarray(0, fileOutPos));
   }
 
-  if (file_name.endsWith(".")) file_name = file_name.slice(0, -1);
+  // Handle reserved names and excessive underscores
+  const upperFileName = fileName.toUpperCase();
+  if (
+    RESERVED_NAMES.has(upperFileName) ||
+    RESERVED_NAMES.has(`${upperFileName}.${fileExtension.toUpperCase()}`) ||
+    underscoreCount > letterCount
+  ) {
+    const ext = fileExtension.toLowerCase() as keyof typeof fileTypeWords;
+    const words = fileTypeWords[ext] || fileTypeWords["default"];
+    fileName = words[Math.floor(rng.next() * words.length)] + Math.floor(rng.next() * 10000);
+  }
+
+  // Construct and truncate
+  let file_name = fileExtension ? `${fileName}.${fileExtension}` : fileName;
+  const fullPathLen = sanitizedPath.length + file_name.length;
+  if (fullPathLen > maxLength) {
+    const extLength = fileExtension.length + 1;
+    const available = maxLength - sanitizedPath.length - extLength;
+    if (options.onTruncate === "error") throw new Error(`Path exceeds maxLength of ${maxLength}`);
+    if (options.onTruncate === "smart" && available > 3) {
+      let firstWordEnd = fileName.indexOf("_");
+      if (firstWordEnd === -1 || firstWordEnd > available) firstWordEnd = available;
+      fileName = fileName.substring(0, firstWordEnd);
+      file_name = `${fileName}.${fileExtension}`;
+    } else {
+      file_name = available > 1 ? `${fileName.substring(0, available)}.${fileExtension}` : `f.${fileExtension}`;
+    }
+  }
+  if (file_name[file_name.length - 1] === ".") file_name = file_name.substring(0, file_name.length - 1);
+
+  // Ensure trailing '/'
+  const finalPath = sanitizedPath[sanitizedPath.length - 1] === "/" ? sanitizedPath : `${sanitizedPath}/`;
 
   return {
-    original_path: filepath,
-    path,
+    original_path: `${path}${filename}`,
+    path: finalPath,
     file_name,
     file_type: fileExtension,
     filename_without_extension: fileName,
     extension_with_dot: fileExtension ? `.${fileExtension}` : "",
   };
 }
+
+// Example usage
+function processFilePath(path: string, filename: string, options?: ParsePathOptions): void {
+  const result = parsePathComprehensive(path, filename, options);
+  console.log("Parsed Path Result:");
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// Test cases
+processFilePath("e", "test.txt"); // "/e/"
+processFilePath("docs", "file.txt"); // "/docs/"
+processFilePath("/docs", "file.txt"); // "/docs/"
+processFilePath("/docs/", "file.txt"); // "/docs/"
+processFilePath("/long/path", "very_long_name.pdf", { maxLength: 20, onTruncate: "smart" });

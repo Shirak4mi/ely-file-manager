@@ -49,6 +49,7 @@ export interface PathParseResult {
   file_name: string;
   /** File extension without the dot (e.g., "pdf") */
   file_type: string;
+
   /** Filename without the extension (e.g., "test") */
   filename_without_extension: string;
   /** Extension with leading dot, or empty string if none (e.g., ".pdf" or "") */
