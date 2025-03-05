@@ -67,6 +67,31 @@ const RESERVED_NAMES = new Set<string>([
   "LPT9",
 ]) as ReadonlySet<string>;
 
+const REVERSED_RESERVED_NAMES = new Set<string>([
+  "NOC",
+  "NRP",
+  "XUA",
+  "LUN",
+  "1MOC",
+  "2MOC",
+  "3MOC",
+  "4MOC",
+  "5MOC",
+  "6MOC",
+  "7MOC",
+  "8MOC",
+  "9MOC",
+  "1TPL",
+  "2TPL",
+  "3TPL",
+  "4TPL",
+  "5TPL",
+  "6TPL",
+  "7TPL",
+  "8TPL",
+  "9TPL",
+]) as ReadonlySet<string>;
+
 const ILLEGAL_CHARS_SET = new Set<number>([
   0,
   60,
@@ -472,30 +497,43 @@ function sanitizeFilename(
   if (input.length > buffer.length || containsTraversal(input)) return generateYokaiPath(new SecureRNG(), true).slice(1);
 
   let neutralizedInput = input.replace(/\u202E/g, "_");
-  if (neutralizedInput === "") neutralizedInput = `file.${defaultExtension}`;
+  if (neutralizedInput === "" || isSpaceOnly(neutralizedInput)) neutralizedInput = `file.${defaultExtension}`;
+
   const extIndex = neutralizedInput.lastIndexOf(".");
-  if (extIndex === -1 || extIndex === neutralizedInput.length - 1) {
-    neutralizedInput += `.${defaultExtension}`;
-  }
+  const hasExtension = extIndex > 0 && extIndex < neutralizedInput.length - 1;
+  if (!hasExtension) neutralizedInput += `.${defaultExtension}`;
 
   const normalized = mapper.compose(neutralizedInput);
+
+  if (allowHiddenFiles && isHiddenFile(normalized)) {
+    const encoded = bufferPool.encode(normalized);
+    let position = 0;
+    let hasIllegal = false;
+    for (let i = 0; i < encoded.length && position < buffer.length; i++) {
+      const char = encoded[i];
+      if (char > 0xffff && onOverflow === "error") {
+        throw new SecurityError(`Unicode character U+${char.toString(16).padStart(4, "0")} exceeds mapping range`);
+      }
+      const mapped = mapper.map(char);
+      buffer[position++] =
+        ILLEGAL_FILENAME_CHARS_SET.has(mapped) && mapped !== DEFAULTS.CHAR_CODES.DOT
+          ? DEFAULTS.CHAR_CODES.UNDERSCORE
+          : mapped;
+      if (ILLEGAL_FILENAME_CHARS_SET.has(mapped) && mapped !== DEFAULTS.CHAR_CODES.DOT) hasIllegal = true;
+    }
+    return hasIllegal ? bufferPool.decode(buffer, 0, position) : normalized;
+  }
+
   const encoded = bufferPool.encode(normalized);
   let position = 0;
 
-  for (let i = 0; i < normalized.length && position < buffer.length; i++) {
-    const char = normalized.charCodeAt(i);
-    const mapped =
-      char >= 0xffff && onOverflow === "error"
-        ? (() => {
-            throw new SecurityError(`Unicode character U+${char.toString(16).padStart(4, "0")} exceeds mapping range`);
-          })()
-        : mapper.map(char);
-    // Preserve dot for hidden files if allowed
-    buffer[position++] =
-      (ILLEGAL_FILENAME_CHARS_SET.has(mapped) && !(allowHiddenFiles && mapped === DEFAULTS.CHAR_CODES.DOT && i === 0)) ||
-      mapped > 255
-        ? DEFAULTS.CHAR_CODES.UNDERSCORE
-        : mapped;
+  for (let i = 0; i < encoded.length && position < buffer.length; i++) {
+    const char = encoded[i];
+    if (char > 0xffff && onOverflow === "error") {
+      throw new SecurityError(`Unicode character U+${char.toString(16).padStart(4, "0")} exceeds mapping range`);
+    }
+    const mapped = mapper.map(char);
+    buffer[position++] = ILLEGAL_FILENAME_CHARS_SET.has(mapped) ? DEFAULTS.CHAR_CODES.UNDERSCORE : mapped;
   }
 
   return bufferPool.decode(buffer, 0, position) || `file.${defaultExtension}`;
@@ -549,12 +587,11 @@ function ensureSafeBaseName(
   config: ReturnType<typeof validateOptions>["config"]
 ): string {
   const checkName = platform.isCaseSensitive ? baseName : baseName.toUpperCase();
-  const fullCheckName = extension ? `${checkName}.${extension.toUpperCase()}` : checkName;
-  if (
-    RESERVED_NAMES.has(checkName) ||
-    (extension && RESERVED_NAMES.has(fullCheckName)) ||
-    hasExcessiveUnderscores(baseName)
-  ) {
+  const reversedCheckName = platform.isCaseSensitive
+    ? baseName.split("").reverse().join("")
+    : checkName.split("").reverse().join("").toUpperCase();
+
+  if (RESERVED_NAMES.has(checkName) || REVERSED_RESERVED_NAMES.has(reversedCheckName) || hasExcessiveUnderscores(baseName)) {
     return generateSafeFilename(extension, config.fileTypeWords, config.rng, config.accessibleNames);
   }
   return baseName;
@@ -783,15 +820,16 @@ function validateOptions(
 }
 
 // === Test Suite ===
+// === Updated Test Suite ===
 function runTests() {
-  console.log("Running tests...");
+  console.log("Running enhanced tests...");
 
-  const assertEqual = (actual: any, expected: any, message: string) => {
+  const assertEqual = (actual: any, expected: any, message: string, extraInfo?: string) => {
     const passed = JSON.stringify(actual) === JSON.stringify(expected);
     console.log(
       `${passed ? "✅" : "❌"} ${message}: ${
         passed ? "Passed" : `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
-      }`
+      }${extraInfo ? ` | ${extraInfo}` : ""}`
     );
     return passed;
   };
@@ -803,86 +841,156 @@ function runTests() {
       return false;
     } catch (e) {
       const passed = e instanceof errorType;
-      console.log(`${passed ? "✅" : "❌"} ${message}: ${passed ? "Passed" : `Expected ${errorType.name}, got ${e}`}`);
+      console.log(`${passed ? "✅" : "❌"} ${message}: ${passed ? "Passed" : `Got ${e}`}`);
       return passed;
     }
   };
 
+  const assertMatch = (actual: string, pattern: RegExp, message: string, extraInfo?: string) => {
+    const passed = pattern.test(actual);
+    console.log(
+      `${passed ? "✅" : "❌"} ${message}: ${passed ? "Passed" : `Expected match for ${pattern}, got ${actual}`}${
+        extraInfo ? ` | ${extraInfo}` : ""
+      }`
+    );
+    return passed;
+  };
+
   let allPassed = true;
 
-  // Test 1: Basic path and filename sanitization (POSIX)
+  // Test 1: Basic POSIX path and filename sanitization
+  console.log("\nTest 1: Basic POSIX path and filename");
   const result1 = parsePathComprehensive("/test/path/", "file.txt");
-  allPassed = assertEqual(result1.file_name, "/test/path/file.txt", "Test 1: Basic POSIX path and filename") && allPassed;
+  allPassed = assertEqual(result1.file_name, "/test/path/file.txt", "Basic path and filename") && allPassed;
 
   // Test 2: Empty path and filename
+  console.log("\nTest 2: Empty path and filename");
   const result2 = parsePathComprehensive("", "");
   allPassed =
-    assertEqual(result2.file_path.startsWith("/space"), true, "Test 2: Empty path uses SPACE_PATHS") &&
-    assertEqual(result2.file_name.includes("file.txt"), true, "Test 2: Empty filename gets default extension") &&
+    assertMatch(result2.file_path, /^\/space[1-3]\/$/, "Empty path uses SPACE_PATHS", `Path: ${result2.file_path}`) &&
+    assertEqual(result2.file_type, "txt", "Empty filename gets default extension", `File: ${result2.file_name}`) &&
     allPassed;
 
   // Test 3: Path traversal
+  console.log("\nTest 3: Path traversal");
   const result3 = parsePathComprehensive("/../evil/", "hack.exe");
   allPassed =
-    assertEqual(result3.file_path.startsWith("/yokai/oni"), true, "Test 3: Path traversal replaced with Yokai path") &&
-    allPassed;
+    assertMatch(
+      result3.file_path,
+      /^\/yokai\/oni[1-3]\/yokai\/oni[1-3]\/$/,
+      "Path traversal uses Yokai path",
+      `Path: ${result3.file_path}`
+    ) && allPassed;
 
   // Test 4: Null byte rejection
+  console.log("\nTest 4: Null byte rejection");
   allPassed =
     assertThrows(
       () => parsePathComprehensive("/path\0/", "file.txt"),
       SecurityError,
-      "Test 4: Null byte in path throws SecurityError"
+      "Null byte in path throws SecurityError"
     ) && allPassed;
 
   // Test 5: Reserved name handling (Win32)
+  console.log("\nTest 5: Reserved name handling (Win32)");
   const result5 = parsePathComprehensive("\\test\\", "CON.txt", { platformHandler: new Win32PlatformHandler() });
   allPassed =
-    assertEqual(
-      result5.filename_without_extension.match(/^file\d+$/) !== null,
-      true,
-      "Test 5: Reserved name CON replaced with safe name"
-    ) && allPassed;
+    assertMatch(
+      result5.filename_without_extension,
+      /^file\d+$/,
+      "Reserved name CON replaced with safe name",
+      `Filename: ${result5.file_name}`
+    ) &&
+    assertEqual(result5.file_type, "txt", "Extension preserved", `Full path: ${result5.file_name}`) &&
+    assertEqual(result5.file_path, "/test/", "Path normalized", `Full path: ${result5.file_name}`) &&
+    allPassed;
 
   // Test 6: Hidden file allowed on POSIX
+  console.log("\nTest 6: Hidden file allowed on POSIX");
   const result6 = parsePathComprehensive("/hidden/", ".secret", { allowHiddenFiles: true });
-  allPassed = assertEqual(result6.file_name, "/hidden/.secret", "Test 6: Hidden file allowed with option") && allPassed;
+  allPassed =
+    assertEqual(
+      result6.file_name,
+      "/hidden/.secret",
+      "Hidden file preserved when allowed",
+      `Full result: ${JSON.stringify(result6)}`
+    ) &&
+    assertEqual(result6.file_type, "secret", "Extension correctly identified") &&
+    allPassed;
 
   // Test 7: Max length exceeded
+  console.log("\nTest 7: Max length exceeded");
   allPassed =
     assertThrows(
       () => parsePathComprehensive("/a".repeat(5000), "file.txt", { maxLength: 4096 }),
       PathError,
-      "Test 7: Path exceeding maxLength throws PathError"
+      "Path exceeding maxLength throws PathError"
     ) && allPassed;
 
   // Test 8: sanitizePathArray
+  console.log("\nTest 8: sanitizePathArray");
   const result8 = sanitizePathArray([
     ["/test/", "file1.txt"],
     ["/path/", "file2.txt"],
   ]);
   allPassed =
-    assertEqual(result8.length, 2, "Test 8: sanitizePathArray processes multiple inputs") &&
-    assertEqual(result8[0].file_name, "/test/file1.txt", "Test 8: First array item sanitized correctly") &&
+    assertEqual(result8.length, 2, "Processes multiple inputs") &&
+    assertEqual(result8[0].file_name, "/test/file1.txt", "First item sanitized correctly") &&
+    assertEqual(result8[1].file_name, "/path/file2.txt", "Second item sanitized correctly") &&
     allPassed;
 
   // Test 9: sanitizePaths with no trailing slash
+  console.log("\nTest 9: sanitizePaths with no trailing slash");
   const result9 = sanitizePaths({ trailingSlash: false }, "/path1/", "/path2/");
-  allPassed = assertEqual(result9, ["/path1", "/path2"], "Test 9: sanitizePaths respects no trailing slash") && allPassed;
+  allPassed =
+    assertEqual(result9, ["/path1", "/path2"], "No trailing slash respected", `Result: ${JSON.stringify(result9)}`) &&
+    allPassed;
 
   // Test 10: RTL override sanitization
+  console.log("\nTest 10: RTL override sanitization");
   const result10 = parsePathComprehensive("/path\u202E/", "file.txt");
-  allPassed = assertEqual(result10.file_path, "/path_/", "Test 10: RTL override replaced with underscore") && allPassed;
+  allPassed =
+    assertEqual(result10.file_path, "/path_/", "RTL override replaced with underscore", `Path: ${result10.file_path}`) &&
+    allPassed;
 
   // Test 11: Unicode overflow with error mode
+  console.log("\nTest 11: Unicode overflow with error mode");
   allPassed =
     assertThrows(
       () => parsePathComprehensive("/path/", "\u{1F600}.txt", { onUnicodeOverflow: "error" }),
       SecurityError,
-      "Test 11: Unicode overflow throws SecurityError"
+      "Unicode overflow throws SecurityError"
     ) && allPassed;
 
+  // Test 12: Reversed reserved name handling (Win32)
+  console.log("\nTest 12: Reversed reserved name handling (Win32)");
+  const result12 = parsePathComprehensive("\\test\\", "NOC.txt", { platformHandler: new Win32PlatformHandler() });
+  allPassed =
+    assertMatch(
+      result12.filename_without_extension,
+      /^file\d+$/,
+      "Reversed reserved name NOC replaced with safe name",
+      `Filename: ${result12.file_name}`
+    ) &&
+    assertEqual(result12.file_type, "txt", "Extension preserved", `Full path: ${result12.file_name}`) &&
+    assertEqual(result12.file_path, "/test/", "Path normalized") &&
+    allPassed;
+
+  // Test 13: Reversed reserved name handling (POSIX)
+  console.log("\nTest 13: Reversed reserved name handling (POSIX)");
+  const result13 = parsePathComprehensive("/test/", "NOC.txt");
+  allPassed =
+    assertMatch(
+      result13.filename_without_extension,
+      /^file\d+$/,
+      "Reversed reserved name NOC replaced with safe name",
+      `Filename: ${result13.file_name}`
+    ) &&
+    assertEqual(result13.file_type, "txt", "Extension preserved", `Full path: ${result13.file_name}`) &&
+    allPassed;
+
   console.log(`\n${allPassed ? "✅ All tests passed!" : "❌ Some tests failed."}`);
+  return allPassed;
 }
 
 // Run the tests
