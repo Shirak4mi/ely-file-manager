@@ -20,7 +20,7 @@ export default new Elysia().decorate("api_key", "" as string).post(
     try {
       const totalFilePath = returnActualOSPath(ensureTrailingSlash(path) + file.name);
 
-      const parsed = parsePathComprehensive(path, file.name, { onTruncate: "smart" });
+      const parsed = await parsePathComprehensive(path, file.name, { onTruncate: "smart" });
 
       console.log({ parsed });
 

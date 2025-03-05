@@ -1,7 +1,13 @@
-// Importing predefined lists from "names.ts" for safe random names/paths.
-import { DEFAULT_FILE_TYPE_WORDS, SPACE_PATHS, YOKAI_ONI_PATHS } from "./names.ts";
+// Mocked imports from "names.ts" for testing
+const DEFAULT_FILE_TYPE_WORDS = {
+  txt: ["document", "note", "text"],
+  default: ["file"],
+} as const;
 
-// Custom Error Classes
+const SPACE_PATHS = ["/space1/", "/space2/", "/space3/"] as const;
+const YOKAI_ONI_PATHS = ["/yokai/oni1", "/yokai/oni2", "/yokai/oni3"] as const;
+
+// === Custom Error Classes ===
 class PathError extends Error {
   constructor(message: string) {
     super(message);
@@ -16,12 +22,13 @@ class SecurityError extends Error {
   }
 }
 
-// Constants with Type Safety
+// === Constants with Type Safety ===
 const DEFAULTS = {
   MAX_LENGTH_POSIX: 4096 as const,
   MAX_LENGTH_WIN32: 260 as const,
   BUFFER_SIZE: 1024 as const,
-  BUFFER_SIZE_CATEGORIES: [256, 512, 1024, 2048, 4096] as const,
+  MAX_EXTENSION_LENGTH: 10 as const,
+  DEFAULT_EXTENSION: "txt" as const,
   CHAR_CODES: {
     FORWARD_SLASH: 47 as const,
     UNDERSCORE: 95 as const,
@@ -30,6 +37,7 @@ const DEFAULTS = {
     NULL: 0 as const,
     COLON: 58 as const,
     HYPHEN: 45 as const,
+    RTL_OVERRIDE: 8238 as const,
   } as const,
   BYTE_MASK: 0xff as const,
 } as const;
@@ -59,23 +67,37 @@ const RESERVED_NAMES = new Set<string>([
   "LPT9",
 ]) as ReadonlySet<string>;
 
-const ILLEGAL_CHARS = new Uint8Array(256);
-const ILLEGAL_FILENAME_CHARS = new Uint8Array(256);
-(() => {
-  const illegalCommon = [0, 60, 62, 58, 34, 124, 63, 42, ...Array(32).keys()] as const;
-  for (const char of illegalCommon) {
-    ILLEGAL_CHARS[char] = ILLEGAL_FILENAME_CHARS[char] = 1;
-  }
-  ILLEGAL_CHARS[47] = ILLEGAL_CHARS[92] = 0;
-  ILLEGAL_FILENAME_CHARS[47] = ILLEGAL_FILENAME_CHARS[92] = 1;
-})();
+const ILLEGAL_CHARS_SET = new Set<number>([
+  0,
+  60,
+  62,
+  58,
+  34,
+  124,
+  63,
+  42,
+  DEFAULTS.CHAR_CODES.RTL_OVERRIDE,
+  ...Array(32).keys(),
+]);
+const ILLEGAL_FILENAME_CHARS_SET = new Set<number>([
+  0,
+  60,
+  62,
+  58,
+  34,
+  124,
+  63,
+  42,
+  47,
+  92,
+  DEFAULTS.CHAR_CODES.RTL_OVERRIDE,
+  ...Array(32).keys(),
+]);
 
-// Branded Types for Enhanced Safety
-type BufferSize = (typeof DEFAULTS.BUFFER_SIZE_CATEGORIES)[number];
+// === Types and Interfaces ===
 type TruncateMode = "error" | "smart" | "default";
 type UnicodeOverflowMode = "error" | "ignore";
 
-// Interfaces
 interface ParsePathOptions {
   maxLength?: number;
   unicodeMapper?: UnicodeMapper;
@@ -83,9 +105,13 @@ interface ParsePathOptions {
   onUnicodeOverflow?: UnicodeOverflowMode;
   seed?: Uint32Array;
   fileTypeWords?: Readonly<Record<string, readonly string[]>>;
-  bufferSize?: BufferSize;
+  bufferSize?: number;
   platformHandler?: PlatformHandler;
   accessibleNames?: boolean;
+  defaultExtension?: string;
+  cacheSize?: number;
+  trailingSlash?: boolean;
+  allowHiddenFiles?: boolean;
 }
 
 interface PathParseResult {
@@ -108,54 +134,88 @@ interface UnicodeMapper {
   compose(input: string): string;
 }
 
-// Utility Functions
-function detectPlatform(): "win32" | "posix" {
-  return typeof process !== "undefined" && process.platform === "win32" ? "win32" : "posix";
-}
+// === Custom LRU Cache Implementation ===
+class LRUCache<K, V> {
+  private readonly maxSize: number;
+  private readonly map: Map<K, CacheNode<K, V>>;
+  private head: CacheNode<K, V> | null = null;
+  private tail: CacheNode<K, V> | null = null;
+  private size: number = 0;
 
-function isSpaceOnly(str: string): boolean {
-  for (let i = 0; i < str.length; i++) if (str.charCodeAt(i) > 32) return false;
-  return true;
-}
-
-function containsTraversal(str: string): boolean {
-  const len = str.length;
-  for (let i = 0; i < len - 1; i++) {
-    if (str[i] === "." && str[i + 1] === "." && (i + 2 >= len || str[i + 2] === "/" || str[i + 2] === "\\")) return true;
+  constructor(maxSize: number) {
+    if (maxSize < 1) throw new RangeError("maxSize must be positive");
+    this.maxSize = maxSize;
+    this.map = new Map<K, CacheNode<K, V>>();
   }
-  return false;
-}
 
-function hasExcessiveUnderscores(str: string): boolean {
-  let count = 0;
-  for (let i = 0; i < str.length; i++) {
-    if (str.charCodeAt(i) === DEFAULTS.CHAR_CODES.UNDERSCORE) {
-      if (++count >= 3) return true;
+  get(key: K): V | undefined {
+    const node = this.map.get(key);
+    if (!node) return undefined;
+    this.moveToFront(node);
+    return node.value;
+  }
+
+  set(key: K, value: V): void {
+    let node = this.map.get(key);
+    if (node) {
+      node.value = value;
+      this.moveToFront(node);
     } else {
-      count = 0;
+      node = { key, value, prev: null, next: null };
+      this.map.set(key, node);
+      this.addToFront(node);
+      this.size++;
+      if (this.size > this.maxSize) this.evict();
     }
   }
-  return false;
+
+  has(key: K): boolean {
+    return this.map.has(key);
+  }
+
+  private moveToFront(node: CacheNode<K, V>): void {
+    if (node === this.head) return;
+    if (node.prev) node.prev.next = node.next;
+    if (node.next) node.next.prev = node.prev;
+    if (node === this.tail) this.tail = node.prev;
+    node.next = this.head;
+    node.prev = null;
+    if (this.head) this.head.prev = node;
+    this.head = node;
+    if (!this.tail) this.tail = node;
+  }
+
+  private addToFront(node: CacheNode<K, V>): void {
+    node.next = this.head;
+    node.prev = null;
+    if (this.head) this.head.prev = node;
+    this.head = node;
+    if (!this.tail) this.tail = node;
+  }
+
+  private evict(): void {
+    if (!this.tail) return;
+    const key = this.tail.key;
+    if (this.tail.prev) this.tail.prev.next = null;
+    this.tail = this.tail.prev;
+    this.map.delete(key);
+    this.size--;
+    if (this.size === 0) this.head = null;
+  }
 }
 
-function containsNullByte(str: string): boolean {
-  for (let i = 0; i < str.length; i++) if (str.charCodeAt(i) === DEFAULTS.CHAR_CODES.NULL) return true;
-  return false;
+interface CacheNode<K, V> {
+  key: K;
+  value: V;
+  prev: CacheNode<K, V> | null;
+  next: CacheNode<K, V> | null;
 }
 
-function isHiddenFile(str: string): boolean {
-  return str.charCodeAt(0) === DEFAULTS.CHAR_CODES.DOT;
-}
-
-function throwOverflow(char: number): never {
-  throw new SecurityError(`Unicode character U+${char.toString(16).padStart(4, "0")} exceeds mapping range`);
-}
-
-// Classes
+// === Resource Management ===
 class SecureRNG {
   private readonly buffer: Uint32Array;
   private index: number;
-  private readonly BUFFER_SIZE = 256 as const;
+  private readonly BUFFER_SIZE = 256;
 
   constructor(seed?: Uint32Array) {
     this.buffer = seed ?? new Uint32Array(this.BUFFER_SIZE);
@@ -171,242 +231,274 @@ class SecureRNG {
     if (this.index >= this.BUFFER_SIZE) this.refillBuffer();
     return this.buffer[this.index++] >>> 0;
   }
+}
 
-  nextFloat(): number {
-    return this.next() / 0x100000000;
+class ResourceFactory {
+  private static bufferPoolSize = 50;
+  private static rngPoolSize = 50;
+
+  static createBufferPool(loadFactor: number = 1): BufferPool {
+    this.adjustPoolSize(loadFactor);
+    return new BufferPool(this.bufferPoolSize);
+  }
+
+  static createRNGPool(loadFactor: number = 1): RNGPool {
+    this.adjustPoolSize(loadFactor);
+    return new RNGPool(this.rngPoolSize);
+  }
+
+  static adjustPoolSize(loadFactor: number): void {
+    this.bufferPoolSize = Math.min(1000, Math.max(10, Math.floor(loadFactor * 50)));
+    this.rngPoolSize = this.bufferPoolSize;
   }
 }
 
 class RNGPool {
-  private static readonly pool: SecureRNG[] = [];
-  private static readonly MAX_POOL_SIZE = 50 as const;
-  private static lock: Promise<void> = Promise.resolve();
+  private readonly pool: SecureRNG[] = [];
+  private readonly maxSize: number;
 
-  private static async withLock<T>(operation: () => T): Promise<T> {
-    const unlock = this.lock;
-    this.lock = new Promise((resolve) => setTimeout(resolve, 0)); // Microtask to prevent blocking
-    await unlock;
-    return operation();
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
   }
 
-  static async get(seed?: Uint32Array): Promise<SecureRNG> {
-    return this.withLock(() => this.pool.pop() ?? new SecureRNG(seed));
+  get(seed?: Uint32Array): SecureRNG {
+    return this.pool.pop() ?? new SecureRNG(seed);
   }
 
-  static async release(rng: SecureRNG): Promise<void> {
-    await this.withLock(() => {
-      if (this.pool.length < this.MAX_POOL_SIZE) {
-        this.pool.push(rng);
-      }
-    });
+  release(rng: SecureRNG): void {
+    if (this.pool.length < this.maxSize) this.pool.push(rng);
   }
 }
 
-// Improved BufferPool with Robust Thread Safety
 class BufferPool {
-  private static readonly pools: ReadonlyMap<BufferSize, Set<Uint8Array>> = new Map(
-    DEFAULTS.BUFFER_SIZE_CATEGORIES.map((size) => [size, new Set()])
-  );
-  private static readonly fastPathCache: Uint8Array[] = [];
-  private static readonly FAST_PATH_SIZE = DEFAULTS.BUFFER_SIZE;
-  private static readonly FAST_PATH_MAX = 5 as const;
-  private static readonly MAX_POOL_SIZE = 50 as const;
-  private static lock: Promise<void> = Promise.resolve();
+  private readonly pool: Uint8Array[];
+  private readonly usedBuffers: Set<Uint8Array> = new Set();
+  private readonly encoder = new TextEncoder();
+  private readonly decoder = new TextDecoder();
+  private readonly maxSize: number;
 
-  private static getBufferCategory(size: number): BufferSize {
-    const category = DEFAULTS.BUFFER_SIZE_CATEGORIES.find((cat) => cat >= size);
-    if (!category) {
-      return DEFAULTS.BUFFER_SIZE_CATEGORIES[DEFAULTS.BUFFER_SIZE_CATEGORIES.length - 1];
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+    this.pool = [256, 512, 1024, 2048, 4096].map((size) => new Uint8Array(size));
+  }
+
+  get(size: number): Uint8Array {
+    const available = this.pool.filter((b) => !this.usedBuffers.has(b) && b.length >= size);
+    let buffer =
+      available.length > 0
+        ? available.reduce((a, b) => (a.length < b.length ? a : b))
+        : new Uint8Array(Math.max(size, DEFAULTS.BUFFER_SIZE));
+    this.usedBuffers.add(buffer);
+    this.pool.push(buffer);
+    this.trimPool();
+    return buffer;
+  }
+
+  release(buffer: Uint8Array): void {
+    this.usedBuffers.delete(buffer);
+  }
+
+  encode(str: string): Uint8Array {
+    return this.encoder.encode(str);
+  }
+
+  decode(buffer: Uint8Array, start: number, end: number): string {
+    return this.decoder.decode(buffer.subarray(start, end));
+  }
+
+  private trimPool(): void {
+    if (this.pool.length > this.maxSize) {
+      this.pool.length = this.maxSize;
     }
-    return category;
-  }
-
-  private static async withLock<T>(operation: () => T): Promise<T> {
-    const unlock = this.lock;
-    this.lock = new Promise((resolve) => setTimeout(resolve, 0)); // Microtask for fairness
-    await unlock;
-    return operation();
-  }
-
-  static async get(size: number): Promise<Uint8Array> {
-    return this.withLock(() => {
-      const category = this.getBufferCategory(size);
-      if (category === this.FAST_PATH_SIZE && this.fastPathCache.length > 0) {
-        return this.fastPathCache.pop()!;
-      }
-      const pool = this.pools.get(category);
-      if (!pool) throw new Error(`No pool for buffer size ${category}`);
-      const buffer = pool.size > 0 ? pool.values().next().value : new Uint8Array(category);
-      if (pool.size > 0) pool.delete(buffer);
-      return buffer;
-    });
-  }
-
-  static async release(buffer: Uint8Array): Promise<void> {
-    await this.withLock(() => {
-      const size = buffer.length as BufferSize;
-      if (!DEFAULTS.BUFFER_SIZE_CATEGORIES.includes(size)) return; // Ignore invalid sizes
-      if (size === this.FAST_PATH_SIZE && this.fastPathCache.length < this.FAST_PATH_MAX) {
-        this.fastPathCache.push(buffer);
-        return;
-      }
-      const pool = this.pools.get(size);
-      if (pool && pool.size < this.MAX_POOL_SIZE) {
-        pool.add(buffer);
-      }
-    });
-  }
-
-  static async getBatch(sizes: readonly number[]): Promise<Uint8Array[]> {
-    return this.withLock(() => {
-      return sizes.map((size) => {
-        const category = this.getBufferCategory(size);
-        if (category === this.FAST_PATH_SIZE && this.fastPathCache.length > 0) {
-          return this.fastPathCache.pop()!;
-        }
-        const pool = this.pools.get(category);
-        if (!pool) throw new Error(`No pool for buffer size ${category}`);
-        const buffer = pool.size > 0 ? pool.values().next().value : new Uint8Array(category);
-        if (pool.size > 0) pool.delete(buffer);
-        return buffer;
-      });
-    });
-  }
-
-  static async releaseBatch(buffers: readonly Uint8Array[]): Promise<void> {
-    await this.withLock(() => {
-      for (const buffer of buffers) {
-        const size = buffer.length as BufferSize;
-        if (!DEFAULTS.BUFFER_SIZE_CATEGORIES.includes(size)) continue; // Skip invalid sizes
-        if (size === this.FAST_PATH_SIZE && this.fastPathCache.length < this.FAST_PATH_MAX) {
-          this.fastPathCache.push(buffer);
-          continue;
-        }
-        const pool = this.pools.get(size);
-        if (pool && pool.size < this.MAX_POOL_SIZE) {
-          pool.add(buffer);
-        }
-      }
-    });
-  }
-
-  static async clear(): Promise<void> {
-    await this.withLock(() => {
-      this.pools.forEach((pool) => pool.clear());
-      this.fastPathCache.length = 0;
-    });
   }
 }
 
+// === Platform Handlers ===
 class Win32PlatformHandler implements PlatformHandler {
   readonly maxLength = DEFAULTS.MAX_LENGTH_WIN32;
   readonly isCaseSensitive = false;
+  private readonly normalizeCache: LRUCache<string, string>;
+
+  constructor(cacheSize?: number, inputLength: number = 0) {
+    const defaultCacheSize = Math.min(1000, Math.max(10, Math.ceil(inputLength / 10)));
+    this.normalizeCache = new LRUCache<string, string>(cacheSize ?? defaultCacheSize);
+  }
 
   normalizePath(input: string): string {
-    let path = input.replace(/\\+/g, "\\").replace(/^\.+/, "");
-    if (/^[a-zA-Z]:/.test(path)) path = `/${path.charAt(0).toUpperCase()}${path.slice(2)}`;
-    return path.replace(/\\/g, "/");
+    if (this.normalizeCache.has(input)) return this.normalizeCache.get(input)!;
+    const normalized = input.replace(/\\+/g, "/").replace(/^([a-zA-Z]):/, (_, drive) => `${drive.toUpperCase()}:`);
+    this.normalizeCache.set(input, normalized);
+    return normalized;
   }
 }
 
 class PosixPlatformHandler implements PlatformHandler {
   readonly maxLength = DEFAULTS.MAX_LENGTH_POSIX;
   readonly isCaseSensitive = true;
+  private readonly normalizeCache: LRUCache<string, string>;
+
+  constructor(cacheSize?: number, inputLength: number = 0) {
+    const defaultCacheSize = Math.min(1000, Math.max(10, Math.ceil(inputLength / 10)));
+    this.normalizeCache = new LRUCache<string, string>(cacheSize ?? defaultCacheSize);
+  }
 
   normalizePath(input: string): string {
-    return input.replace(/\/+/g, "/").replace(/\\/g, "/").replace(/^\.+/, "");
+    if (this.normalizeCache.has(input)) return this.normalizeCache.get(input)!;
+    const normalized = input.replace(/\/+/g, "/");
+    this.normalizeCache.set(input, normalized);
+    return normalized;
   }
 }
 
-namespace PlatformConfig {
-  export const platform: PlatformHandler =
-    detectPlatform() === "win32" ? new Win32PlatformHandler() : new PosixPlatformHandler();
-  export const handler: PlatformHandler = platform;
-}
-
+// === Unicode Handling ===
 class CompactUnicodeMapper implements UnicodeMapper {
-  private mappingTable: Uint8Array | null = null;
+  private readonly mappingTable: Map<number, number>;
 
-  private initTable(): void {
-    if (this.mappingTable) return;
-    this.mappingTable = new Uint8Array(0x1000).fill(DEFAULTS.CHAR_CODES.UNDERSCORE);
-    for (let i = 32; i < 127; i++) this.mappingTable[i] = i;
+  constructor() {
+    this.mappingTable = new Map();
+    for (let i = 32; i < 127; i++) this.mappingTable.set(i, i);
   }
 
   map(char: number): number {
-    this.initTable();
-    return char < 0x1000 ? this.mappingTable![char] : DEFAULTS.CHAR_CODES.UNDERSCORE;
+    return this.mappingTable.get(char) ?? (char <= 0x10ffff ? char : DEFAULTS.CHAR_CODES.UNDERSCORE);
   }
 
   compose(input: string): string {
-    return input;
+    return input.normalize("NFC");
   }
 }
 
-// Core Functions
-function generateYokaiPath(rng: SecureRNG, asFilename: boolean = false): string {
+// === Utility Functions ===
+const detectPlatform = (): "win32" | "posix" =>
+  typeof process !== "undefined" && process.platform === "win32" ? "win32" : "posix";
+
+const isSpaceOnly = (str: string): boolean => str.trim() === "";
+
+const containsTraversal = (str: string): boolean => {
+  for (let i = 0; i < str.length - 1; i++) {
+    if (
+      str.charCodeAt(i) === DEFAULTS.CHAR_CODES.DOT &&
+      str.charCodeAt(i + 1) === DEFAULTS.CHAR_CODES.DOT &&
+      (i + 2 >= str.length ||
+        str.charCodeAt(i + 2) === DEFAULTS.CHAR_CODES.FORWARD_SLASH ||
+        str.charCodeAt(i + 2) === DEFAULTS.CHAR_CODES.BACK_SLASH)
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const hasExcessiveUnderscores = (str: string): boolean => {
+  let underscoreCount = 0;
+  for (let i = 0; i < str.length; i++) {
+    if (str.charCodeAt(i) === DEFAULTS.CHAR_CODES.UNDERSCORE) {
+      underscoreCount++;
+      if (underscoreCount >= 3) return true;
+    } else {
+      underscoreCount = 0;
+    }
+  }
+  return false;
+};
+
+const containsNullByte = (str: string): boolean => str.includes("\0");
+
+const isHiddenFile = (str: string): boolean => str.charCodeAt(0) === DEFAULTS.CHAR_CODES.DOT;
+
+const containsRTLOverride = (str: string): boolean => /\u202E/.test(str);
+
+const isValidExtension = (ext: string): boolean => {
+  return ext.length > 0 && ext.length <= DEFAULTS.MAX_EXTENSION_LENGTH && /^[a-zA-Z0-9]+$/.test(ext);
+};
+
+// === Core Functions ===
+const generateYokaiPath = (rng: SecureRNG, asFilename: boolean = false): string => {
   const idx1 = rng.next() % YOKAI_ONI_PATHS.length;
   const idx2 = rng.next() % YOKAI_ONI_PATHS.length;
   const base = YOKAI_ONI_PATHS[idx1] + YOKAI_ONI_PATHS[idx2].slice(1);
   return asFilename ? base.replace(/\//g, "_") : base;
-}
+};
 
-function sanitizePath(input: string, buffer: Uint8Array, rng: SecureRNG, platform: PlatformHandler): string {
-  if (containsNullByte(input)) throw new SecurityError("Path contains null byte, security risk");
-  if (input.length > platform.maxLength) throw new PathError("Path exceeds max length, overflow risk");
+function sanitizePath(
+  input: string,
+  buffer: Uint8Array,
+  rng: SecureRNG,
+  platform: PlatformHandler,
+  bufferPool: BufferPool,
+  trailingSlash: boolean
+): string {
+  if (containsNullByte(input)) throw new SecurityError(`Path "${input}" contains null byte`);
+  if (input.length > platform.maxLength) throw new PathError(`Path "${input}" exceeds max length`);
 
-  if (isSpaceOnly(input)) return SPACE_PATHS[rng.next() % SPACE_PATHS.length];
-  if (input.length > buffer.length || containsTraversal(input)) return generateYokaiPath(rng);
+  const neutralizedInput = input.replace(/\u202E/g, "_");
+  if (isSpaceOnly(neutralizedInput)) return SPACE_PATHS[rng.next() % SPACE_PATHS.length];
+  if (containsTraversal(neutralizedInput)) return generateYokaiPath(rng);
 
-  const normalized = platform.normalizePath(input);
+  const normalized = platform.normalizePath(neutralizedInput);
+  const encoded = bufferPool.encode(normalized);
   let position = 0;
-  if ((normalized.charCodeAt(0) & DEFAULTS.BYTE_MASK) !== DEFAULTS.CHAR_CODES.FORWARD_SLASH) {
+
+  if (normalized.charCodeAt(0) !== DEFAULTS.CHAR_CODES.FORWARD_SLASH) {
+    if (position >= buffer.length) throw new PathError("Buffer too small for path");
     buffer[position++] = DEFAULTS.CHAR_CODES.FORWARD_SLASH;
   }
 
-  for (let i = 0; i < normalized.length; i++) {
-    const char = normalized.charCodeAt(i) & DEFAULTS.BYTE_MASK;
-    buffer[position++] = ILLEGAL_CHARS[char]
+  for (let i = 0; i < encoded.length && position < buffer.length; i++) {
+    const char = encoded[i];
+    buffer[position++] = ILLEGAL_CHARS_SET.has(char)
       ? DEFAULTS.CHAR_CODES.UNDERSCORE
       : char === DEFAULTS.CHAR_CODES.BACK_SLASH
       ? DEFAULTS.CHAR_CODES.FORWARD_SLASH
       : char;
   }
 
-  const result = new TextDecoder().decode(buffer.subarray(0, position));
-  return result.endsWith("/") ? result : result + "/";
+  const result = bufferPool.decode(buffer, 0, position);
+  return trailingSlash && !result.endsWith("/") ? `${result}/` : result;
 }
 
-async function sanitizeFilename(
+function sanitizeFilename(
   input: string,
   buffer: Uint8Array,
   mapper: UnicodeMapper,
   onOverflow: UnicodeOverflowMode,
-  platform: PlatformHandler
-): Promise<string> {
-  if (containsNullByte(input)) throw new SecurityError("Filename contains null byte, potential security risk");
-  if (isHiddenFile(input)) throw new SecurityError("Hidden filenames (starting with '.') are not allowed for security");
-  if (input.length > buffer.length || containsTraversal(input)) {
-    const rng = await RNGPool.get();
-    try {
-      return generateYokaiPath(rng, true).slice(1);
-    } finally {
-      await RNGPool.release(rng);
-    }
+  platform: PlatformHandler,
+  bufferPool: BufferPool,
+  defaultExtension: string,
+  allowHiddenFiles: boolean
+): string {
+  if (containsNullByte(input)) throw new SecurityError(`Filename "${input}" contains null byte`);
+  if (!allowHiddenFiles && isHiddenFile(input)) throw new SecurityError(`Hidden filename "${input}" not allowed`);
+  if (input.length > buffer.length || containsTraversal(input)) return generateYokaiPath(new SecureRNG(), true).slice(1);
+
+  let neutralizedInput = input.replace(/\u202E/g, "_");
+  if (neutralizedInput === "") neutralizedInput = `file.${defaultExtension}`;
+  const extIndex = neutralizedInput.lastIndexOf(".");
+  if (extIndex === -1 || extIndex === neutralizedInput.length - 1) {
+    neutralizedInput += `.${defaultExtension}`;
   }
 
-  const normalized = mapper.compose(platform.normalizePath(input));
+  const normalized = mapper.compose(neutralizedInput);
+  const encoded = bufferPool.encode(normalized);
   let position = 0;
 
-  for (let i = 0; i < normalized.length; i++) {
+  for (let i = 0; i < normalized.length && position < buffer.length; i++) {
     const char = normalized.charCodeAt(i);
     const mapped =
-      char >= 0xffff ? (onOverflow === "error" ? throwOverflow(char) : DEFAULTS.CHAR_CODES.UNDERSCORE) : mapper.map(char);
+      char >= 0xffff && onOverflow === "error"
+        ? (() => {
+            throw new SecurityError(`Unicode character U+${char.toString(16).padStart(4, "0")} exceeds mapping range`);
+          })()
+        : mapper.map(char);
+    // Preserve dot for hidden files if allowed
     buffer[position++] =
-      (mapped < 256 && ILLEGAL_FILENAME_CHARS[mapped]) || mapped > 255 ? DEFAULTS.CHAR_CODES.UNDERSCORE : mapped;
+      (ILLEGAL_FILENAME_CHARS_SET.has(mapped) && !(allowHiddenFiles && mapped === DEFAULTS.CHAR_CODES.DOT && i === 0)) ||
+      mapped > 255
+        ? DEFAULTS.CHAR_CODES.UNDERSCORE
+        : mapped;
   }
 
-  return new TextDecoder().decode(buffer.subarray(0, position)) || "file";
+  return bufferPool.decode(buffer, 0, position) || `file.${defaultExtension}`;
 }
 
 function generateSafeFilename(
@@ -418,7 +510,7 @@ function generateSafeFilename(
   const words = fileTypeWords[extension.toLowerCase()] ?? fileTypeWords["default"] ?? ["file"];
   const word = words[rng.next() % words.length];
   const number = rng.next() % 10000;
-  return accessible ? `${word}-${number}` : `${word}${number}`;
+  return accessible ? `${word}-${number}.${extension}` : `${word}${number}.${extension}`;
 }
 
 function truncateFilename(
@@ -430,79 +522,40 @@ function truncateFilename(
 ): string {
   if (onTruncate === "error") throw new PathError(`Path exceeds maxLength of ${available}`);
   const extPart = extension ? `.${extension}` : "";
-  if (available <= 1) return `f${extPart}`;
+  if (available <= extPart.length + 1) return `f${extPart}`;
   const cutPoint =
-    onTruncate === "smart" && available > 3
+    onTruncate === "smart" && available > extPart.length + 3
       ? Math.min(
-          baseName.indexOf(accessible ? "-" : "_") > -1 ? baseName.indexOf(accessible ? "-" : "_") : available,
-          available
+          baseName.indexOf(accessible ? "-" : "") > -1
+            ? baseName.indexOf(accessible ? "-" : "")
+            : available - extPart.length,
+          available - extPart.length
         )
-      : available;
+      : available - extPart.length;
   return `${baseName.slice(0, cutPoint)}${extPart}`;
 }
 
-function validateOptions(options: ParsePathOptions): {
-  readonly platform: PlatformHandler;
-  readonly maxLength: number;
-  readonly bufferSize: BufferSize;
-  readonly unicodeMapper: UnicodeMapper;
-  readonly config: {
-    readonly onTruncate: TruncateMode;
-    readonly onUnicodeOverflow: UnicodeOverflowMode;
-    readonly fileTypeWords: Readonly<Record<string, readonly string[]>>;
-    readonly rng: Promise<SecureRNG>;
-    readonly accessibleNames: boolean;
-  };
-} {
-  const platform = options.platformHandler ?? PlatformConfig.handler;
-  const maxLength = options.maxLength ?? platform.maxLength;
-  if (maxLength < 1) throw new PathError("maxLength must be positive");
-  if (maxLength > platform.maxLength) throw new SecurityError("maxLength exceeds platform limit, potential security risk");
-  const bufferSize = (options.bufferSize ?? DEFAULTS.BUFFER_SIZE) as BufferSize;
-  if (!DEFAULTS.BUFFER_SIZE_CATEGORIES.includes(bufferSize)) {
-    throw new PathError(`bufferSize must be one of ${DEFAULTS.BUFFER_SIZE_CATEGORIES.join(", ")}`);
-  }
-  const unicodeMapper = options.unicodeMapper ?? getCachedUnicodeMapper();
-  if (options.unicodeMapper && (typeof unicodeMapper.map !== "function" || typeof unicodeMapper.compose !== "function")) {
-    throw new PathError("unicodeMapper must implement map() and compose() functions");
-  }
-
-  return {
-    platform,
-    maxLength,
-    bufferSize,
-    unicodeMapper,
-    config: {
-      onTruncate: options.onTruncate ?? "default",
-      onUnicodeOverflow: options.onUnicodeOverflow ?? "ignore",
-      fileTypeWords: options.fileTypeWords ?? DEFAULT_FILE_TYPE_WORDS,
-      rng: RNGPool.get(options.seed),
-      accessibleNames: options.accessibleNames ?? false,
-    },
-  };
-}
-
-function extractFileComponents(sanitizedBase: string): { readonly baseName: string; readonly extension: string } {
+function extractFileComponents(sanitizedBase: string): { baseName: string; extension: string } {
   const extIndex = sanitizedBase.lastIndexOf(".");
   const baseName = extIndex > 0 ? sanitizedBase.slice(0, extIndex) : sanitizedBase;
   const extension = extIndex > 0 && extIndex < sanitizedBase.length - 1 ? sanitizedBase.slice(extIndex + 1) : "";
   return { baseName, extension };
 }
 
-async function ensureSafeBaseName(
+function ensureSafeBaseName(
   baseName: string,
   extension: string,
   platform: PlatformHandler,
   config: ReturnType<typeof validateOptions>["config"]
-): Promise<string> {
+): string {
   const checkName = platform.isCaseSensitive ? baseName : baseName.toUpperCase();
+  const fullCheckName = extension ? `${checkName}.${extension.toUpperCase()}` : checkName;
   if (
     RESERVED_NAMES.has(checkName) ||
-    RESERVED_NAMES.has(`${checkName}.${extension.toUpperCase()}`) ||
+    (extension && RESERVED_NAMES.has(fullCheckName)) ||
     hasExcessiveUnderscores(baseName)
   ) {
-    const rng = await config.rng;
-    return generateSafeFilename(extension, config.fileTypeWords, rng, config.accessibleNames);
+    return generateSafeFilename(extension, config.fileTypeWords, config.rng, config.accessibleNames);
   }
   return baseName;
 }
@@ -518,14 +571,14 @@ function constructFinalFileName(
   const cleanBaseName = baseName.replace(/\//g, "_");
   const fullLength = sanitizedPath.length + cleanBaseName.length + extPart.length;
   return fullLength > maxLength
-    ? truncateFilename(
+    ? `${sanitizedPath}${truncateFilename(
         cleanBaseName,
         extension,
-        maxLength - sanitizedPath.length - extPart.length,
+        maxLength - sanitizedPath.length,
         config.onTruncate,
         config.accessibleNames
-      )
-    : `${cleanBaseName}${extPart}`;
+      )}`
+    : `${sanitizedPath}${cleanBaseName}${extPart}`;
 }
 
 function buildResult(
@@ -546,94 +599,291 @@ function buildResult(
   };
 }
 
-// Cached Utilities
-const getCachedUnicodeMapper = (() => {
-  let cached: UnicodeMapper | null = null;
-  return (): UnicodeMapper => {
-    if (!cached) cached = new CompactUnicodeMapper();
-    return cached;
-  };
-})();
-
-// Main Export
-export async function parsePathComprehensive(
+// === Main Exports ===
+export function parsePathComprehensive(
   path: string = "/",
   filename: string = "file",
   options: ParsePathOptions = {}
-): Promise<PathParseResult> {
-  const { platform, maxLength, bufferSize, unicodeMapper, config } = validateOptions(options);
-
-  const fullInput = `${path}${filename}`;
-  if (fullInput.length > maxLength) {
-    throw new PathError("Combined path and filename exceed maxLength, potential overflow risk");
+): PathParseResult {
+  if (typeof path !== "string" || typeof filename !== "string") {
+    throw new TypeError("Both 'path' and 'filename' must be strings");
   }
 
-  const [pathBuffer, filenameBuffer] = await BufferPool.getBatch([bufferSize, bufferSize]);
+  const fullInput = `${path}${filename}`;
+  const { platform, maxLength, unicodeMapper, config } = validateOptions(options, fullInput.length);
+  const defaultExtension = options.defaultExtension ?? DEFAULTS.DEFAULT_EXTENSION;
+  if (fullInput.length > maxLength) throw new PathError("Combined path and filename exceed maxLength");
+
+  const loadFactor = Math.max(1, Math.ceil(fullInput.length / DEFAULTS.BUFFER_SIZE));
+  const bufferPool = ResourceFactory.createBufferPool(loadFactor);
+  const rngPool = ResourceFactory.createRNGPool(loadFactor);
+  const buffer = bufferPool.get(Math.max(path.length, filename.length) * 2);
+  const rng = rngPool.get(options.seed);
 
   try {
-    const rng = await config.rng;
-    const sanitizedPath = sanitizePath(path, pathBuffer, rng, platform);
-    const sanitizedBase = await sanitizeFilename(
+    const sanitizedPath = sanitizePath(path, buffer, rng, platform, bufferPool, options.trailingSlash ?? true);
+    const sanitizedBase = sanitizeFilename(
       filename,
-      filenameBuffer,
+      buffer,
       unicodeMapper,
       config.onUnicodeOverflow,
-      platform
+      platform,
+      bufferPool,
+      defaultExtension,
+      options.allowHiddenFiles ?? platform.isCaseSensitive
     );
     const { baseName, extension } = extractFileComponents(sanitizedBase);
-
-    if (!extension) {
-      throw new PathError("File does not have an extension, cannot process");
+    if (!isValidExtension(extension)) {
+      throw new PathError(`Invalid extension "${extension}" in filename "${filename}"`);
     }
 
-    const safeBaseName = await ensureSafeBaseName(baseName, extension, platform, config);
+    const safeBaseName = ensureSafeBaseName(baseName, extension, platform, config);
     const fileName = constructFinalFileName(sanitizedPath, safeBaseName, extension, maxLength, config);
-
-    if (containsNullByte(fileName)) {
-      throw new SecurityError("Generated filename contains null byte, security violation");
-    }
+    if (containsNullByte(fileName)) throw new SecurityError("Generated filename contains null byte");
 
     return buildResult(path, filename, sanitizedPath, fileName, safeBaseName, extension);
   } finally {
-    await BufferPool.releaseBatch([pathBuffer, filenameBuffer]);
-    await RNGPool.release(await config.rng);
+    bufferPool.release(buffer);
+    rngPool.release(rng);
   }
 }
 
-// Tests
-async function runTests(): Promise<void> {
-  const tests: ReadonlyArray<readonly [string, string, ParsePathOptions | undefined]> = [
-    ["e", "test.txt", undefined],
-    [" ", "file.txt", undefined],
-    ["/long/path", "very_long_name.pdf", { maxLength: 20, onTruncate: "smart" }],
-    ["../evil", "file.txt", undefined],
-    ["/path", "test___doc.txt", undefined],
-    ["/path", "test____doc.txt", undefined],
-    ["/path", "test____doc.txt", { accessibleNames: true }],
-    ["C:\\Users\\Docs", "テスト.txt", { platformHandler: new Win32PlatformHandler() }],
-    ["/home/user", "人山.pdf", { platformHandler: new PosixPlatformHandler() }],
-    ["/path", "ملف.txt", { platformHandler: new PosixPlatformHandler() }],
-    ["/path", "🦁test.txt", { onUnicodeOverflow: "error" }],
-    ["/path", "🦁test.txt", { onUnicodeOverflow: "ignore", accessibleNames: true }],
-    ["/", "", undefined],
-    ["/", "CON", undefined],
-    ["/path with spaces/", "file.txt", undefined],
-    ["/", "a".repeat(5000) + ".txt", { maxLength: 4096 }],
-    ["/", "file%00hack.txt", undefined],
-    ["/", ".hidden.txt", undefined],
-  ];
+export function sanitizePathArray(inputs: [string, string][], options: ParsePathOptions = {}): PathParseResult[] {
+  if (
+    !Array.isArray(inputs) ||
+    !inputs.every(
+      (item): item is [string, string] =>
+        Array.isArray(item) && item.length === 2 && typeof item[0] === "string" && typeof item[1] === "string"
+    )
+  ) {
+    throw new TypeError("Input must be an array of [string, string] tuples");
+  }
 
-  for (let i = 0; i < tests.length; i++) {
-    const [path, filename, options] = tests[i];
-    try {
-      const result = await parsePathComprehensive(path, filename, options);
-      console.log(`Test ${i + 1}:`, JSON.stringify(result, null, 2));
-    } catch (e) {
-      console.log(`Test ${i + 1} failed:`, e instanceof Error ? e.message : String(e));
+  const maxInputLength = Math.max(...inputs.flatMap(([p, f]) => [`${p}${f}`.length]));
+  const { platform, maxLength, unicodeMapper, config } = validateOptions(options, maxInputLength);
+  const defaultExtension = options.defaultExtension ?? DEFAULTS.DEFAULT_EXTENSION;
+  const loadFactor = Math.max(1, Math.ceil(maxInputLength / DEFAULTS.BUFFER_SIZE));
+  const bufferPool = ResourceFactory.createBufferPool(loadFactor);
+  const rngPool = ResourceFactory.createRNGPool(loadFactor);
+  const buffer = bufferPool.get(Math.max(...inputs.flatMap(([p, f]) => [p.length, f.length])) * 2);
+  const rng = rngPool.get(options.seed);
+  const results = new Array<PathParseResult>(inputs.length);
+
+  try {
+    for (let i = 0; i < inputs.length; i++) {
+      const [path, filename] = inputs[i];
+      const fullInput = `${path}${filename}`;
+      if (fullInput.length > maxLength) throw new PathError(`Input "${fullInput}" exceeds maxLength`);
+
+      const sanitizedPath = sanitizePath(path, buffer, rng, platform, bufferPool, options.trailingSlash ?? true);
+      const sanitizedBase = sanitizeFilename(
+        filename,
+        buffer,
+        unicodeMapper,
+        config.onUnicodeOverflow,
+        platform,
+        bufferPool,
+        defaultExtension,
+        options.allowHiddenFiles ?? platform.isCaseSensitive
+      );
+      const { baseName, extension } = extractFileComponents(sanitizedBase);
+      if (!isValidExtension(extension)) {
+        throw new PathError(`Invalid extension "${extension}" in filename "${filename}"`);
+      }
+
+      const safeBaseName = ensureSafeBaseName(baseName, extension, platform, config);
+      const fileName = constructFinalFileName(sanitizedPath, safeBaseName, extension, maxLength, config);
+      if (containsNullByte(fileName)) throw new SecurityError(`Generated filename "${fileName}" contains null byte`);
+
+      results[i] = buildResult(path, filename, sanitizedPath, fileName, safeBaseName, extension);
     }
+    return results;
+  } finally {
+    bufferPool.release(buffer);
+    rngPool.release(rng);
   }
 }
 
-if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
-  void runTests();
+export function sanitizePaths(...args: [string, ...string[]] | [ParsePathOptions, ...string[]]): string[] {
+  const hasOptions = typeof args[0] === "object" && args[0] !== null && !Array.isArray(args[0]);
+  const options: ParsePathOptions = hasOptions ? (args[0] as ParsePathOptions) : {};
+  const paths = hasOptions ? (args.slice(1) as string[]) : (args as string[]);
+
+  if (!paths.every((path) => typeof path === "string")) throw new TypeError("All paths must be strings");
+
+  const maxInputLength = Math.max(...paths.map((p) => p.length));
+  const { platform, maxLength } = validateOptions(options, maxInputLength);
+  const loadFactor = Math.max(1, Math.ceil(maxInputLength / DEFAULTS.BUFFER_SIZE));
+  const bufferPool = ResourceFactory.createBufferPool(loadFactor);
+  const rngPool = ResourceFactory.createRNGPool(loadFactor);
+  const buffer = bufferPool.get(maxInputLength * 2);
+  const rng = rngPool.get(options.seed);
+  const results = new Array<string>(paths.length);
+
+  try {
+    for (let i = 0; i < paths.length; i++) {
+      const path = paths[i];
+      if (containsNullByte(path)) throw new SecurityError(`Path "${path}" contains null byte`);
+      if (path.length > maxLength) throw new PathError(`Path "${path}" exceeds max length ${maxLength}`);
+
+      results[i] = sanitizePath(path, buffer, rng, platform, bufferPool, options.trailingSlash ?? true);
+    }
+    return results;
+  } finally {
+    bufferPool.release(buffer);
+    rngPool.release(rng);
+  }
 }
+
+function validateOptions(
+  options: ParsePathOptions,
+  inputLength: number = 0
+): {
+  platform: PlatformHandler;
+  maxLength: number;
+  unicodeMapper: UnicodeMapper;
+  config: {
+    onTruncate: TruncateMode;
+    onUnicodeOverflow: UnicodeOverflowMode;
+    fileTypeWords: Readonly<Record<string, readonly string[]>>;
+    rng: SecureRNG;
+    accessibleNames: boolean;
+  };
+} {
+  const platform =
+    options.platformHandler ??
+    (detectPlatform() === "win32"
+      ? new Win32PlatformHandler(options.cacheSize, inputLength)
+      : new PosixPlatformHandler(options.cacheSize, inputLength));
+  const maxLength = options.maxLength ?? platform.maxLength;
+  if (maxLength < 1 || maxLength > platform.maxLength) throw new PathError("Invalid maxLength");
+
+  const unicodeMapper = options.unicodeMapper ?? new CompactUnicodeMapper();
+  if (options.unicodeMapper && (typeof unicodeMapper.map !== "function" || typeof unicodeMapper.compose !== "function")) {
+    throw new PathError("unicodeMapper must implement map() and compose()");
+  }
+
+  const defaultExtension = options.defaultExtension ?? DEFAULTS.DEFAULT_EXTENSION;
+  if (!isValidExtension(defaultExtension)) {
+    throw new PathError(`Invalid default extension "${defaultExtension}"`);
+  }
+
+  return {
+    platform,
+    maxLength,
+    unicodeMapper,
+    config: {
+      onTruncate: options.onTruncate ?? "default",
+      onUnicodeOverflow: options.onUnicodeOverflow ?? "ignore",
+      fileTypeWords: options.fileTypeWords ?? DEFAULT_FILE_TYPE_WORDS,
+      rng: new SecureRNG(options.seed),
+      accessibleNames: options.accessibleNames ?? false,
+    },
+  };
+}
+
+// === Test Suite ===
+function runTests() {
+  console.log("Running tests...");
+
+  const assertEqual = (actual: any, expected: any, message: string) => {
+    const passed = JSON.stringify(actual) === JSON.stringify(expected);
+    console.log(
+      `${passed ? "✅" : "❌"} ${message}: ${
+        passed ? "Passed" : `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
+      }`
+    );
+    return passed;
+  };
+
+  const assertThrows = (fn: () => any, errorType: any, message: string) => {
+    try {
+      fn();
+      console.log(`❌ ${message}: Expected ${errorType.name} but no error thrown`);
+      return false;
+    } catch (e) {
+      const passed = e instanceof errorType;
+      console.log(`${passed ? "✅" : "❌"} ${message}: ${passed ? "Passed" : `Expected ${errorType.name}, got ${e}`}`);
+      return passed;
+    }
+  };
+
+  let allPassed = true;
+
+  // Test 1: Basic path and filename sanitization (POSIX)
+  const result1 = parsePathComprehensive("/test/path/", "file.txt");
+  allPassed = assertEqual(result1.file_name, "/test/path/file.txt", "Test 1: Basic POSIX path and filename") && allPassed;
+
+  // Test 2: Empty path and filename
+  const result2 = parsePathComprehensive("", "");
+  allPassed =
+    assertEqual(result2.file_path.startsWith("/space"), true, "Test 2: Empty path uses SPACE_PATHS") &&
+    assertEqual(result2.file_name.includes("file.txt"), true, "Test 2: Empty filename gets default extension") &&
+    allPassed;
+
+  // Test 3: Path traversal
+  const result3 = parsePathComprehensive("/../evil/", "hack.exe");
+  allPassed =
+    assertEqual(result3.file_path.startsWith("/yokai/oni"), true, "Test 3: Path traversal replaced with Yokai path") &&
+    allPassed;
+
+  // Test 4: Null byte rejection
+  allPassed =
+    assertThrows(
+      () => parsePathComprehensive("/path\0/", "file.txt"),
+      SecurityError,
+      "Test 4: Null byte in path throws SecurityError"
+    ) && allPassed;
+
+  // Test 5: Reserved name handling (Win32)
+  const result5 = parsePathComprehensive("\\test\\", "CON.txt", { platformHandler: new Win32PlatformHandler() });
+  allPassed =
+    assertEqual(
+      result5.filename_without_extension.match(/^file\d+$/) !== null,
+      true,
+      "Test 5: Reserved name CON replaced with safe name"
+    ) && allPassed;
+
+  // Test 6: Hidden file allowed on POSIX
+  const result6 = parsePathComprehensive("/hidden/", ".secret", { allowHiddenFiles: true });
+  allPassed = assertEqual(result6.file_name, "/hidden/.secret", "Test 6: Hidden file allowed with option") && allPassed;
+
+  // Test 7: Max length exceeded
+  allPassed =
+    assertThrows(
+      () => parsePathComprehensive("/a".repeat(5000), "file.txt", { maxLength: 4096 }),
+      PathError,
+      "Test 7: Path exceeding maxLength throws PathError"
+    ) && allPassed;
+
+  // Test 8: sanitizePathArray
+  const result8 = sanitizePathArray([
+    ["/test/", "file1.txt"],
+    ["/path/", "file2.txt"],
+  ]);
+  allPassed =
+    assertEqual(result8.length, 2, "Test 8: sanitizePathArray processes multiple inputs") &&
+    assertEqual(result8[0].file_name, "/test/file1.txt", "Test 8: First array item sanitized correctly") &&
+    allPassed;
+
+  // Test 9: sanitizePaths with no trailing slash
+  const result9 = sanitizePaths({ trailingSlash: false }, "/path1/", "/path2/");
+  allPassed = assertEqual(result9, ["/path1", "/path2"], "Test 9: sanitizePaths respects no trailing slash") && allPassed;
+
+  // Test 10: RTL override sanitization
+  const result10 = parsePathComprehensive("/path\u202E/", "file.txt");
+  allPassed = assertEqual(result10.file_path, "/path_/", "Test 10: RTL override replaced with underscore") && allPassed;
+
+  // Test 11: Unicode overflow with error mode
+  allPassed =
+    assertThrows(
+      () => parsePathComprehensive("/path/", "\u{1F600}.txt", { onUnicodeOverflow: "error" }),
+      SecurityError,
+      "Test 11: Unicode overflow throws SecurityError"
+    ) && allPassed;
+
+  console.log(`\n${allPassed ? "✅ All tests passed!" : "❌ Some tests failed."}`);
+}
+
+// Run the tests
+runTests();
