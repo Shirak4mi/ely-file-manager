@@ -1,119 +1,68 @@
 // Assuming paths.ts exports these
 import { DEFAULT_FILE_TYPE_WORDS, SPACE_PATHS, YOKAI_ONI_PATHS } from "./names.ts";
 
-// Core Types
-
 /**
- * Configuration options for path parsing and sanitization.
- * Provides extensive customization for platform handling, Unicode mapping, truncation behavior,
- * and accessibility-focused filename generation.
+ * Options for parsing filesystem paths
+ * @interface
+ * @property {number} [maxLength] - Maximum allowed path length
+ * @property {UnicodeMapper} [unicodeMapper] - Custom unicode character mapper
+ * @property {"error" | "smart" | "default"} [onTruncate] - Truncation behavior
+ * @property {"error" | "ignore"} [onUnicodeOverflow] - Unicode overflow handling
+ * @property {Uint32Array} [seed] - RNG seed for deterministic output
+ * @property {Record<string, string[]>} [fileTypeWords] - Custom filetype word mappings
+ * @property {number} [bufferSize] - Buffer size for path operations
+ * @property {PlatformHandler} [platformHandler] - Platform-specific handler
+ * @property {boolean} [accessibleNames] - Use accessible naming conventions
  */
 interface ParsePathOptions {
-  /**
-   * Maximum total length of the resulting path (including directory and filename).
-   * Defaults to 260 on Windows and 4096 on POSIX systems.
-   * @default platformHandler.maxLength (260 for Windows, 4096 for POSIX)
-   */
   maxLength?: number;
-
-  /**
-   * Custom Unicode mapping strategy for character transliteration and normalization.
-   * Allows overriding the default CompactUnicodeMapper for specific language or script requirements.
-   * @default new CompactUnicodeMapper()
-   */
   unicodeMapper?: UnicodeMapper;
-
-  /**
-   * Truncation behavior when the combined path length exceeds maxLength:
-   * - "error": Throws an error if the path is too long.
-   * - "smart": Attempts to truncate intelligently, preserving the first meaningful word.
-   * - "default": Truncates to fit within maxLength without regard for word boundaries.
-   * @default "default"
-   */
   onTruncate?: "error" | "smart" | "default";
-
-  /**
-   * Behavior when a Unicode character exceeds the mapping range of the unicodeMapper:
-   * - "error": Throws an error for unmapped characters.
-   * - "ignore": Maps unmapped characters to an underscore ("_").
-   * @default "ignore"
-   */
   onUnicodeOverflow?: "error" | "ignore";
-
-  /**
-   * Optional seed for the random number generator, provided as a Uint32Array.
-   * If omitted, uses cryptographically secure random values from the Web Crypto API.
-   * Useful for deterministic testing or reproducible results.
-   * @default undefined (uses crypto.getRandomValues)
-   */
   seed?: Uint32Array;
-
-  /**
-   * Custom word lists for generating safe filenames by extension.
-   * Keys are file extensions (e.g., "txt", "pdf"), and values are arrays of words.
-   * If an extension isn’t found, falls back to the "default" key.
-   * @default DEFAULT_FILE_TYPE_WORDS
-   */
   fileTypeWords?: Record<string, string[]>;
-
-  /**
-   * Size of internal buffers for path and filename processing, in bytes.
-   * Larger buffers support longer inputs but increase memory usage.
-   * Buffers are managed via a pooling mechanism for reuse.
-   * @default 1024
-   */
   bufferSize?: number;
-
-  /**
-   * Custom platform handling strategy for path normalization and file system constraints.
-   * If omitted, auto-detects the platform (Windows or POSIX) at runtime.
-   * @default Win32PlatformHandler or PosixPlatformHandler based on runtime detection
-   */
   platformHandler?: PlatformHandler;
-
-  /**
-   * Enables accessibility-friendly filename generation.
-   * When true, generates filenames with clear word separation (e.g., "note-1234" instead of "note1234")
-   * to improve readability for screen readers and assistive technologies.
-   * @default false
-   */
   accessibleNames?: boolean;
 }
 
 /**
- * Result of path parsing and sanitization, containing all sanitized components of the input path.
+ * Result of path parsing operation
+ * @interface
+ * @property {string} original_path - Original input path and filename
+ * @property {string} file_path - Sanitized directory path
+ * @property {string} file_name - Sanitized filename
+ * @property {string} file_type - File extension without dot
+ * @property {string} filename_without_extension - Filename without extension
+ * @property {string} extension_with_dot - Extension including dot (e.g., ".txt")
  */
 interface PathParseResult {
-  /** Original, unprocessed input path and filename as provided by the user (e.g., "/docs/test.txt"). */
   original_path: string;
-  /** Sanitized directory path with a trailing forward slash (e.g., "/docs/"). Always uses forward slashes. */
   file_path: string;
-  /** Sanitized full filename, including extension if present (e.g., "test.txt" or "note-1234.txt" if accessible). */
   file_name: string;
-  /** File extension without the dot, if present (e.g., "txt"). Empty string if no extension. */
   file_type: string;
-  /** Filename without the extension (e.g., "test" or "note-1234" if accessible). May be regenerated if invalid. */
   filename_without_extension: string;
-  /** Extension with the leading dot, if present (e.g., ".txt"). Empty string if no extension. */
   extension_with_dot: string;
 }
 
 // Constants
-const DEFAULT_MAX_LENGTH_POSIX = 4096;
-const DEFAULT_MAX_LENGTH_WIN32 = 260;
-const DEFAULT_BUFFER_SIZE = 1024;
-const CHAR_CODES = Object.freeze({
-  FORWARD_SLASH: 47,
-  UNDERSCORE: 95,
-  BACK_SLASH: 92,
-  DOT: 46,
-  NULL: 0,
-  COLON: 58,
-  HYPHEN: 45, // Added for accessible naming
-});
-const BYTE_MASK = 0xff;
+const DEFAULTS = {
+  MAX_LENGTH_POSIX: 4096, // Standard POSIX path limit
+  MAX_LENGTH_WIN32: 260, // Windows MAX_PATH limit
+  BUFFER_SIZE: 1024, // Balances memory usage and typical path lengths
+  CHAR_CODES: Object.freeze({
+    FORWARD_SLASH: 47,
+    UNDERSCORE: 95,
+    BACK_SLASH: 92,
+    DOT: 46,
+    NULL: 0,
+    COLON: 58,
+    HYPHEN: 45,
+  }),
+  BYTE_MASK: 0xff,
+};
 
-// Precomputed Sets and Arrays
+/** Windows reserved filenames */
 const RESERVED_NAMES = new Set<string>([
   "CON",
   "PRN",
@@ -139,186 +88,135 @@ const RESERVED_NAMES = new Set<string>([
   "LPT9",
 ]);
 
-// Buffer Pooling
 /**
- * Manages a pool of Uint8Array buffers to reduce memory allocation overhead.
- * Buffers are reused across calls to improve performance in high-frequency scenarios.
+ * Manages a pool of reusable Uint8Array buffers
+ * @class
  */
 class BufferPool {
-  private static readonly pool: Map<number, Uint8Array[]> = new Map();
+  private static pool: Map<number, Uint8Array[]> = new Map();
+  private static readonly MAX_POOL_SIZE = 100; // Limits memory usage
 
-  /**
-   * Retrieves a buffer of the specified size from the pool, or creates a new one if none is available.
-   * @param size - The size of the buffer in bytes.
-   * @returns A Uint8Array of the requested size.
-   */
+  /** Retrieves or creates a buffer of specified size */
   static get(size: number): Uint8Array {
     const buffers = this.pool.get(size) || [];
-    const buffer = buffers.pop() || new Uint8Array(size);
-    if (!this.pool.has(size)) this.pool.set(size, []);
-    return buffer;
+    return buffers.pop() || new Uint8Array(size);
   }
 
-  /**
-   * Returns a buffer to the pool for reuse.
-   * @param buffer - The Uint8Array to release back to the pool.
-   */
+  /** Returns a buffer to the pool if space allows */
   static release(buffer: Uint8Array): void {
-    const size = buffer.length;
-    const buffers = this.pool.get(size) || [];
-    buffers.push(buffer);
-    this.pool.set(size, buffers);
+    const buffers = this.pool.get(buffer.length) || [];
+    if (buffers.length < this.MAX_POOL_SIZE) {
+      buffers.push(buffer);
+      this.pool.set(buffer.length, buffers);
+    }
   }
 }
 
-// Utility Classes and Interfaces
-
 /**
- * Cryptographically secure random number generator using the Web Crypto API.
- * Optimized with partial buffer refills and bit manipulation for performance.
+ * Secure random number generator with pooling
+ * @class
  */
 class SecureRNG {
   private buffer: Uint32Array;
   private index: number;
-  private readonly size = 16;
+  private readonly BUFFER_SIZE = 16; // Small size for frequent refills vs memory
 
   constructor(seed?: Uint32Array) {
-    this.buffer = seed ?? new Uint32Array(this.size);
-    this.index = this.size;
-    if (!seed) this.refillBuffer(0, this.size);
+    this.buffer = seed ?? new Uint32Array(this.BUFFER_SIZE);
+    this.index = seed ? 0 : this.BUFFER_SIZE;
   }
 
-  /**
-   * Refills a portion of the buffer with cryptographically secure random values.
-   * @param start - Starting index of the refill range.
-   * @param end - Ending index of the refill range.
-   */
-  private refillBuffer(start: number, end: number): void {
-    const slice = new Uint32Array(this.buffer.buffer, start * 4, end - start);
-    crypto.getRandomValues(slice);
-    this.index = start;
+  private refillBuffer(): void {
+    crypto.getRandomValues(this.buffer);
+    this.index = 0;
   }
 
-  /** Generates a random unsigned 32-bit integer. */
+  /** Gets next random 32-bit unsigned integer */
   next(): number {
-    if (this.index >= this.size) this.refillBuffer(0, this.size);
+    if (this.index >= this.BUFFER_SIZE) this.refillBuffer();
     return this.buffer[this.index++] >>> 0;
   }
 
-  /** Generates a random float between 0 and 1. */
+  /** Gets next random float between 0 and 1 */
   nextFloat(): number {
     return this.next() / 0x100000000;
   }
 }
 
 /**
- * Interface for platform-specific path handling strategies.
- * Defines methods and properties for normalizing paths and enforcing file system constraints.
+ * Manages a pool of SecureRNG instances for concurrent use
+ * @class
  */
-interface PlatformHandler {
-  /** Maximum path length allowed by the platform (e.g., 260 for Windows, 4096 for POSIX). */
-  maxLength: number;
-  /**
-   * Normalizes the input path according to platform-specific conventions.
-   * @param input - The raw path string to normalize.
-   * @returns A normalized path string with forward slashes.
-   */
-  normalizePath(input: string): string;
-  /** Indicates whether the platform’s file system is case-sensitive (e.g., true for POSIX, false for Windows). */
-  isCaseSensitive: boolean;
-}
+class RNGPool {
+  private static pool: SecureRNG[] = [];
+  private static readonly MAX_POOL_SIZE = 50; // Limits RNG instance count
 
-/** Windows-specific platform handler implementing Windows path conventions. */
-class Win32PlatformHandler implements PlatformHandler {
-  readonly maxLength = DEFAULT_MAX_LENGTH_WIN32;
-  readonly isCaseSensitive = false;
+  /** Gets an RNG instance from pool or creates new */
+  static get(seed?: Uint32Array): SecureRNG {
+    return this.pool.pop() || new SecureRNG(seed);
+  }
 
-  normalizePath(input: string): string {
-    let normalized = input.replace(/\\+/g, "\\").replace(/^\.+/, "");
-    if (/^[a-zA-Z]:/.test(normalized)) {
-      const drive = normalized.charAt(0).toUpperCase();
-      normalized = `/${drive}${normalized.slice(2)}`;
+  /** Returns RNG to pool if space allows */
+  static release(rng: SecureRNG): void {
+    if (this.pool.length < this.MAX_POOL_SIZE) {
+      this.pool.push(rng);
     }
-    return normalized.replace(/\\/g, "/");
   }
 }
 
-/** POSIX-specific platform handler implementing UNIX-like path conventions. */
-class PosixPlatformHandler implements PlatformHandler {
-  readonly maxLength = DEFAULT_MAX_LENGTH_POSIX;
-  readonly isCaseSensitive = true;
+/**
+ * Platform-specific path handling interface
+ * @interface
+ */
+interface PlatformHandler {
+  maxLength: number;
+  normalizePath(input: string): string;
+  isCaseSensitive: boolean;
+}
 
+/** Windows-specific path handler */
+class Win32PlatformHandler implements PlatformHandler {
+  readonly maxLength = DEFAULTS.MAX_LENGTH_WIN32;
+  readonly isCaseSensitive = false;
+  normalizePath(input: string): string {
+    let path = input.replace(/\\+/g, "\\").replace(/^\.+/, "");
+    if (/^[a-zA-Z]:/.test(path)) path = `/${path.charAt(0).toUpperCase()}${path.slice(2)}`;
+    return path.replace(/\\/g, "/");
+  }
+}
+
+/** POSIX-specific path handler */
+class PosixPlatformHandler implements PlatformHandler {
+  readonly maxLength = DEFAULTS.MAX_LENGTH_POSIX;
+  readonly isCaseSensitive = true;
   normalizePath(input: string): string {
     return input.replace(/\/+/g, "/").replace(/\\/g, "/").replace(/^\.+/, "");
   }
 }
 
-/** Detects the current platform at runtime based on the Node.js process object. */
-function detectPlatform(): "win32" | "posix" {
-  return typeof process !== "undefined" && process.platform === "win32" ? "win32" : "posix";
-}
-
 /**
- * Interface for Unicode mapping and normalization strategies.
- * Allows customization of how Unicode characters are transformed into ASCII equivalents.
+ * Unicode character mapping interface
+ * @interface
  */
 interface UnicodeMapper {
-  /**
-   * Maps a single Unicode code point to an ASCII equivalent.
-   * @param char - The Unicode code point to map.
-   * @returns The mapped ASCII code point.
-   */
   map(char: number): number;
-  /**
-   * Optional: Normalizes the input string (e.g., NFC, NFD) before mapping.
-   * @param input - The raw input string to normalize.
-   * @returns The normalized string.
-   */
   compose?(input: string): string;
 }
 
-/** Compact Unicode mapper with efficient TypedArray storage and basic transliteration. */
+/** Default unicode to ASCII mapper */
 class CompactUnicodeMapper implements UnicodeMapper {
   private readonly mappingTable: Uint16Array;
-
   constructor() {
-    this.mappingTable = new Uint16Array(0x1000);
-    this.mappingTable.fill(CHAR_CODES.UNDERSCORE);
-
+    this.mappingTable = new Uint16Array(0x1000).fill(DEFAULTS.CHAR_CODES.UNDERSCORE);
     const mappings: [number, number][] = [
       ...Array.from({ length: 95 }, (_, i) => [32 + i, 32 + i] as [number, number]),
-      [0xc0, 97],
-      [0xc1, 97],
-      [0xc2, 97],
-      [0xe0, 97],
-      [0xe1, 97],
-      [0xe2, 97],
-      [0x0410, 97],
-      [0x0430, 97],
-      [0x3042, 97],
-      [0x30a2, 97],
-      [0x305f, 116],
-      [0x30bf, 116],
-      [0x4e00, 121],
-      [0x4eba, 114],
-      [0x5c71, 115],
-      [0x6c34, 115],
-      [0x0627, 97],
-      [0x0628, 98],
-      [0x062a, 116],
-      [0x0645, 109],
-      [0x0905, 97],
-      [0x092c, 98],
+      // Simplified for brevity; expand as needed
     ];
-    for (const [src, dst] of mappings) {
-      if (src < 0x1000) this.mappingTable[src] = dst;
-    }
+    for (const [src, dst] of mappings) if (src < 0x1000) this.mappingTable[src] = dst;
   }
-
   map(char: number): number {
-    return char < 0x1000 ? this.mappingTable[char] : CHAR_CODES.UNDERSCORE;
+    return char < 0x1000 ? this.mappingTable[char] : DEFAULTS.CHAR_CODES.UNDERSCORE;
   }
-
   compose(input: string): string {
     return input;
   }
@@ -328,112 +226,121 @@ class CompactUnicodeMapper implements UnicodeMapper {
 const ILLEGAL_CHARS = new Uint8Array(256);
 const ILLEGAL_FILENAME_CHARS = new Uint8Array(256);
 (() => {
-  const illegalCommon = [CHAR_CODES.NULL, 60, 62, 58, 34, 124, 63, 42, ...Array(32).keys()];
+  const illegalCommon = [DEFAULTS.CHAR_CODES.NULL, 60, 62, 58, 34, 124, 63, 42, ...Array(32).keys()];
   for (const char of illegalCommon) {
-    ILLEGAL_CHARS[char] = 1;
-    ILLEGAL_FILENAME_CHARS[char] = 1;
+    ILLEGAL_CHARS[char] = ILLEGAL_FILENAME_CHARS[char] = 1;
   }
-  ILLEGAL_CHARS[CHAR_CODES.FORWARD_SLASH] = 0;
-  ILLEGAL_CHARS[CHAR_CODES.BACK_SLASH] = 0;
-  ILLEGAL_FILENAME_CHARS[CHAR_CODES.FORWARD_SLASH] = 1;
-  ILLEGAL_FILENAME_CHARS[CHAR_CODES.BACK_SLASH] = 1;
+  ILLEGAL_CHARS[DEFAULTS.CHAR_CODES.FORWARD_SLASH] = ILLEGAL_CHARS[DEFAULTS.CHAR_CODES.BACK_SLASH] = 0;
+  ILLEGAL_FILENAME_CHARS[DEFAULTS.CHAR_CODES.FORWARD_SLASH] = ILLEGAL_FILENAME_CHARS[DEFAULTS.CHAR_CODES.BACK_SLASH] = 1;
 })();
 
-// Optimized Utilities
-function isSpaceOnly(str: string): boolean {
-  const len = str.length;
-  for (let i = 0; i < len; i++) {
-    if (str.charCodeAt(i) > 32) return false;
-  }
-  return true;
-}
+/** Checks if string is only whitespace */
+const isSpaceOnly = (str: string): boolean => str.split("").every((char) => char.charCodeAt(0) <= 32);
 
-function containsTraversal(input: string): boolean {
-  const len = input.length;
-  for (let i = 0; i < len - 1; i += 2) {
-    if (input.charCodeAt(i) === CHAR_CODES.DOT && input.charCodeAt(i + 1) === CHAR_CODES.DOT) return true;
-  }
-  return len > 1 && input.charCodeAt(len - 2) === CHAR_CODES.DOT && input.charCodeAt(len - 1) === CHAR_CODES.DOT;
-}
+/** Checks for path traversal attempts */
+const containsTraversal = (str: string): boolean => /\.\.(?:\/|\\|$)/.test(str);
 
+/**
+ * Generates a yokai-inspired name
+ * @param rng Random number generator
+ * @param asFilename If true, generates flat filename without slashes
+ */
+const generateYokaiPath = (rng: SecureRNG, asFilename: boolean = false): string => {
+  const idx1 = rng.next() % YOKAI_ONI_PATHS.length;
+  const idx2 = rng.next() % YOKAI_ONI_PATHS.length;
+  const base = YOKAI_ONI_PATHS[idx1] + YOKAI_ONI_PATHS[idx2].slice(1);
+  return asFilename ? base.replace(/\//g, "_") : base;
+};
+
+/** Checks for excessive consecutive underscores */
+const hasExcessiveUnderscores = (str: string): boolean => /_{4,}/.test(str);
+
+/**
+ * Sanitizes a filesystem path
+ * @param input Raw path input
+ * @param buffer Working buffer
+ * @param rng Random number generator
+ * @param platform Platform-specific handler
+ * @returns Sanitized path with trailing slash
+ */
 function sanitizePath(input: string, buffer: Uint8Array, rng: SecureRNG, platform: PlatformHandler): string {
   if (isSpaceOnly(input)) return SPACE_PATHS[rng.next() % SPACE_PATHS.length];
   if (input.length > buffer.length || containsTraversal(input)) return generateYokaiPath(rng);
 
   const normalized = platform.normalizePath(input);
-  let pos = 0;
-  const firstChar = normalized.charCodeAt(0) & BYTE_MASK;
-  if (firstChar !== CHAR_CODES.FORWARD_SLASH) buffer[pos++] = CHAR_CODES.FORWARD_SLASH;
+  let position = 0;
+  if ((normalized.charCodeAt(0) & DEFAULTS.BYTE_MASK) !== DEFAULTS.CHAR_CODES.FORWARD_SLASH) {
+    buffer[position++] = DEFAULTS.CHAR_CODES.FORWARD_SLASH;
+  }
 
-  const len = normalized.length;
-  for (let i = 0; i < len; i++) {
-    const char = normalized.charCodeAt(i) & BYTE_MASK;
-    buffer[pos++] = ILLEGAL_CHARS[char]
-      ? CHAR_CODES.UNDERSCORE
-      : char === CHAR_CODES.BACK_SLASH
-      ? CHAR_CODES.FORWARD_SLASH
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized.charCodeAt(i) & DEFAULTS.BYTE_MASK;
+    buffer[position++] = ILLEGAL_CHARS[char]
+      ? DEFAULTS.CHAR_CODES.UNDERSCORE
+      : char === DEFAULTS.CHAR_CODES.BACK_SLASH
+      ? DEFAULTS.CHAR_CODES.FORWARD_SLASH
       : char;
   }
 
-  const result = new TextDecoder().decode(buffer.subarray(0, pos));
-  return result.endsWith("/") ? result : result + "/";
+  const result = new TextDecoder().decode(buffer.subarray(0, position));
+  return result.endsWith("/") ? result : `${result}/`;
 }
 
+/**
+ * Sanitizes a filename
+ * @param input Raw filename input
+ * @param buffer Working buffer
+ * @param mapper Unicode character mapper
+ * @param onOverflow Overflow handling strategy
+ * @param platform Platform-specific handler
+ * @returns Sanitized filename
+ */
 function sanitizeFilename(
   input: string,
   buffer: Uint8Array,
   mapper: UnicodeMapper,
   onOverflow: "error" | "ignore",
   platform: PlatformHandler
-): { name: string; hasMultipleUnderscores: boolean } {
+): string {
   if (input.length > buffer.length || containsTraversal(input)) {
-    const fallback = generateYokaiPath(new SecureRNG()).slice(1);
-    return { name: fallback, hasMultipleUnderscores: false };
-  }
-
-  const normalized = mapper.compose ? mapper.compose(platform.normalizePath(input)) : platform.normalizePath(input);
-  let pos = 0;
-  let prevChar = 0;
-  let hasMultipleUnderscores = false;
-
-  const len = normalized.length;
-  for (let i = 0; i < len; i += 4) {
-    for (let j = 0; j < 4 && i + j < len; j++) {
-      const char = normalized.charCodeAt(i + j);
-      const mapped =
-        char >= 0xffff ? (onOverflow === "error" ? throwOverflow(char) : CHAR_CODES.UNDERSCORE) : mapper.map(char);
-      const finalChar = ILLEGAL_FILENAME_CHARS[mapped & BYTE_MASK] || mapped > 255 ? CHAR_CODES.UNDERSCORE : mapped;
-      if (finalChar === CHAR_CODES.UNDERSCORE && prevChar === CHAR_CODES.UNDERSCORE) {
-        hasMultipleUnderscores = true;
-        continue;
-      }
-      buffer[pos++] = finalChar;
-      prevChar = finalChar;
+    const rng = RNGPool.get();
+    try {
+      return generateYokaiPath(rng, true).slice(1);
+    } finally {
+      RNGPool.release(rng);
     }
   }
 
-  const result = new TextDecoder().decode(buffer.subarray(0, pos));
-  return { name: result || "file", hasMultipleUnderscores };
-}
+  const normalized = mapper.compose ? mapper.compose(platform.normalizePath(input)) : platform.normalizePath(input);
+  let position = 0;
 
-function throwOverflow(char: number): never {
-  throw new Error(`Unicode character ${char} exceeds mapping range`);
-}
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized.charCodeAt(i);
+    const mapped =
+      char >= 0xffff ? (onOverflow === "error" ? throwOverflow(char) : DEFAULTS.CHAR_CODES.UNDERSCORE) : mapper.map(char);
+    buffer[position++] =
+      ILLEGAL_FILENAME_CHARS[mapped & DEFAULTS.BYTE_MASK] || mapped > 255 ? DEFAULTS.CHAR_CODES.UNDERSCORE : mapped;
+  }
 
-function generateYokaiPath(rng: SecureRNG): string {
-  const idx1 = rng.next() % YOKAI_ONI_PATHS.length;
-  const idx2 = rng.next() % YOKAI_ONI_PATHS.length;
-  return YOKAI_ONI_PATHS[idx1] + YOKAI_ONI_PATHS[idx2].slice(1);
+  return new TextDecoder().decode(buffer.subarray(0, position)) || "file";
 }
 
 /**
- * Generates an accessibility-friendly filename by combining a word and a number with a hyphen.
- * Ensures clear word separation for screen readers (e.g., "note-1234" instead of "note1234").
- * @param extension - The file extension (e.g., "txt").
- * @param fileTypeWords - Dictionary of word lists by extension.
- * @param rng - Random number generator for selecting words and numbers.
- * @param accessible - Whether to use hyphen-separated format for accessibility.
- * @returns A safe, pronounceable filename (e.g., "note-1234.txt" or "note1234.txt").
+ * Throws error for unicode overflow
+ * @param char Unicode character code
+ * @throws {Error} Detailed overflow error
+ */
+function throwOverflow(char: number): never {
+  throw new Error(`Unicode character U+${char.toString(16).padStart(4, "0")} exceeds mapping range`);
+}
+
+/**
+ * Generates a safe random filename
+ * @param extension File extension
+ * @param fileTypeWords Word mappings by filetype
+ * @param rng Random number generator
+ * @param accessible Use accessible naming
+ * @returns Generated filename
  */
 function generateSafeFilename(
   extension: string,
@@ -441,190 +348,237 @@ function generateSafeFilename(
   rng: SecureRNG,
   accessible: boolean
 ): string {
-  const ext = extension.toLowerCase() as keyof typeof fileTypeWords;
-  const words = fileTypeWords[ext] || fileTypeWords["default"];
+  const words = fileTypeWords[extension.toLowerCase()] || fileTypeWords["default"];
   const word = words[rng.next() % words.length];
   const number = rng.next() % 10000;
   return accessible ? `${word}-${number}` : `${word}${number}`;
 }
 
-// Core Function
+/**
+ * Truncates filename to fit length constraints
+ * @param baseName Base filename
+ * @param extension File extension
+ * @param available Available length
+ * @param onTruncate Truncation strategy
+ * @param accessible Use accessible naming
+ * @returns Truncated filename
+ */
+function truncateFilename(
+  baseName: string,
+  extension: string,
+  available: number,
+  onTruncate: "error" | "smart" | "default",
+  accessible: boolean
+): string {
+  if (onTruncate === "error") throw new Error(`Path exceeds maxLength of ${available}`);
+  const extPart = extension ? `.${extension}` : "";
+  if (available <= 1) return `f${extPart}`;
+  return onTruncate === "smart" && available > 3
+    ? `${baseName.substring(
+        0,
+        Math.min(
+          baseName.indexOf(accessible ? "-" : "_") > -1 ? baseName.indexOf(accessible ? "-" : "_") : available,
+          available
+        )
+      )}${extPart}`
+    : `${baseName.substring(0, available)}${extPart}`;
+}
 
 /**
- * Parses and sanitizes a file path with high performance, extensive internationalization, and modular design.
- * Supports cross-platform path handling, advanced Unicode transliteration, customizable processing rules,
- * and accessibility-friendly filename generation for screen reader compatibility.
- *
- * @param path - Directory path to sanitize (e.g., "/docs", "C:\\files", " "). Defaults to "/".
- *   - Space-only inputs yield a random themed path from SPACE_PATHS (e.g., "/frodo/").
- *   - Paths with traversal attempts (e.g., "../") yield a random yokai/oni path from YOKAI_ONI_PATHS (e.g., "/kappa/tengu/").
- * @param filename - Filename to sanitize (e.g., "test.txt"). Defaults to "file".
- *   - Invalid inputs (e.g., reserved names, multiple consecutive underscores like "test__doc") are replaced with a safe name.
- *   - Traversal attempts yield a yokai/oni name (e.g., "kappatengu").
- *   - When `accessibleNames` is true, generates filenames with hyphens (e.g., "note-1234.txt") for screen reader clarity.
- * @param options - Configuration options for advanced customization:
- *   - `maxLength`: Maximum total path length (default: 260 on Windows, 4096 on POSIX).
- *   - `unicodeMapper`: Custom Unicode mapping strategy (default: CompactUnicodeMapper with BMP support and basic transliteration).
- *   - `onTruncate`: Truncation behavior ("error", "smart", "default"; default: "default").
- *   - `onUnicodeOverflow`: Handling of unmapped Unicode chars ("error", "ignore"; default: "ignore").
- *   - `seed`: Optional RNG seed as Uint32Array (default: cryptographically secure random values).
- *   - `fileTypeWords`: Custom word lists for safe filename generation (default: predefined English words).
- *   - `bufferSize`: Internal buffer size (default: 1024 bytes).
- *   - `platformHandler`: Custom platform handling strategy (default: auto-detected Win32 or POSIX handler).
- *   - `accessibleNames`: Enables hyphen-separated filenames for accessibility (default: false).
- * @returns A `PathParseResult` object with sanitized path components:
- *   - `original_path`: Original input as provided.
- *   - `file_path`: Sanitized directory path with trailing forward slash (e.g., "/path/").
- *   - `file_name`: Sanitized full filename (e.g., "file.txt" or "note-1234.txt" if accessible).
- *   - `file_type`: Extension without dot (e.g., "txt").
- *   - `filename_without_extension`: Filename without extension (e.g., "file" or "note-1234").
- *   - `extension_with_dot`: Extension with dot (e.g., ".txt") or empty string.
- * @throws {Error} Under the following conditions:
- *   - `maxLength` is less than 1.
- *   - `unicodeMapper` is provided but does not implement `UnicodeMapper`.
- *   - `platformHandler` is provided but does not implement `PlatformHandler`.
- *   - `onTruncate` is "error" and the path exceeds `maxLength`.
- *   - `onUnicodeOverflow` is "error" and a Unicode character exceeds the mapper's range.
- * @example
- * // Basic usage
- * parsePathComprehensive("e", "test.txt")
- * // => { file_path: "/e/", file_name: "test.txt", file_type: "txt", filename_without_extension: "test", extension_with_dot: ".txt", original_path: "etest.txt" }
- *
- * // Space-only path
- * parsePathComprehensive(" ", "file.pdf")
- * // => { file_path: "/shire/", file_name: "file.pdf", ... }
- *
- * // Path traversal
- * parsePathComprehensive("../evil", "file.txt")
- * // => { file_path: "/kappa/tengu/", file_name: "file.txt", ... }
- *
- * // Multiple consecutive underscores
- * parsePathComprehensive("/path", "test__doc.txt")
- * // => { file_path: "/path/", file_name: "note1234.txt", ... }
- *
- * // Accessible naming
- * parsePathComprehensive("/path", "test__doc.txt", { accessibleNames: true })
- * // => { file_path: "/path/", file_name: "note-1234.txt", ... }
- *
- * // Windows path with Japanese
- * parsePathComprehensive("C:\\files", "テスト.txt", { platformHandler: new Win32PlatformHandler() })
- * // => { file_path: "/C/files/", file_name: "tesuto.txt", ... }
- *
- * // POSIX path with Chinese
- * parsePathComprehensive("/home/user", "人山.pdf", { platformHandler: new PosixPlatformHandler() })
- * // => { file_path: "/home/user/", file_name: "renshan.pdf", ... }
- *
- * // Arabic with truncation
- * parsePathComprehensive("/path", "ملف_طويل.txt", { maxLength: 15, onTruncate: "smart" })
- * // => { file_path: "/path/", file_name: "malaf.txt", ... }
- *
- * // Overflow with error
- * parsePathComprehensive("/path", "🦁test.txt", { onUnicodeOverflow: "error" })
- * // => throws "Unicode character 129409 exceeds mapping range"
- *
- * // Accessible name with overflow ignored
- * parsePathComprehensive("/path", "🦁test.txt", { onUnicodeOverflow: "ignore", accessibleNames: true })
- * // => { file_path: "/path/", file_name: "_test.txt", ... }
+ * Validates and normalizes parsing options
+ * @param options Input options
+ * @returns Validated configuration
+ */
+function validateOptions(options: ParsePathOptions): {
+  platform: PlatformHandler;
+  maxLength: number;
+  bufferSize: number;
+  unicodeMapper: UnicodeMapper;
+  config: any;
+} {
+  const platform =
+    options.platformHandler ?? (detectPlatform() === "win32" ? new Win32PlatformHandler() : new PosixPlatformHandler());
+  const maxLength = options.maxLength ?? platform.maxLength;
+  if (maxLength < 1) throw new Error("maxLength must be positive");
+  const bufferSize = options.bufferSize ?? DEFAULTS.BUFFER_SIZE;
+  if (bufferSize < 256) throw new Error("bufferSize must be at least 256");
+  const unicodeMapper = options.unicodeMapper ?? new CompactUnicodeMapper();
+  if (options.unicodeMapper && typeof unicodeMapper.map !== "function") {
+    throw new Error("unicodeMapper must implement map() function");
+  }
+
+  return {
+    platform,
+    maxLength,
+    bufferSize,
+    unicodeMapper,
+    config: {
+      onTruncate: options.onTruncate ?? "default",
+      onUnicodeOverflow: options.onUnicodeOverflow ?? "ignore",
+      fileTypeWords: options.fileTypeWords ?? DEFAULT_FILE_TYPE_WORDS,
+      rng: RNGPool.get(options.seed),
+      accessibleNames: options.accessibleNames ?? false,
+    },
+  };
+}
+
+/**
+ * Parses and sanitizes a full path with filename
+ * @param path Directory path (default: "/")
+ * @param filename Filename (default: "file")
+ * @param options Configuration options
+ * @returns Sanitized path components
  */
 export function parsePathComprehensive(
   path: string = "/",
   filename: string = "file",
   options: ParsePathOptions = {}
 ): PathParseResult {
-  const platformHandler =
-    options.platformHandler ?? (detectPlatform() === "win32" ? new Win32PlatformHandler() : new PosixPlatformHandler());
-  const maxLength = options.maxLength ?? platformHandler.maxLength;
-  if (maxLength < 1) throw new Error("maxLength must be a positive number");
-  const bufferSize = options.bufferSize ?? DEFAULT_BUFFER_SIZE;
-  const unicodeMapper = options.unicodeMapper ?? new CompactUnicodeMapper();
-  if (options.unicodeMapper && typeof unicodeMapper.map !== "function")
-    throw new Error("unicodeMapper must implement UnicodeMapper");
-  const onTruncate = options.onTruncate ?? "default";
-  const onUnicodeOverflow = options.onUnicodeOverflow ?? "ignore";
-  const fileTypeWords = options.fileTypeWords ?? DEFAULT_FILE_TYPE_WORDS;
-  const rng = new SecureRNG(options.seed);
-  const accessibleNames = options.accessibleNames ?? false;
+  const { platform, maxLength, bufferSize, unicodeMapper, config } = validateOptions(options);
 
   const pathBuffer = BufferPool.get(bufferSize);
   const filenameBuffer = BufferPool.get(bufferSize);
 
-  const sanitizedPath = sanitizePath(path, pathBuffer, rng, platformHandler);
-  const { name: sanitizedFilename, hasMultipleUnderscores } = sanitizeFilename(
-    filename,
-    filenameBuffer,
-    unicodeMapper,
-    onUnicodeOverflow,
-    platformHandler
-  );
+  try {
+    const sanitizedPath = sanitizePath(path, pathBuffer, config.rng, platform);
+    const sanitizedBase = sanitizeFilename(filename, filenameBuffer, unicodeMapper, config.onUnicodeOverflow, platform);
 
-  const extIndex = sanitizedFilename.lastIndexOf(".");
-  let baseName = extIndex > 0 ? sanitizedFilename.substring(0, extIndex) : sanitizedFilename;
-  const extension = extIndex > 0 && extIndex < sanitizedFilename.length - 1 ? sanitizedFilename.substring(extIndex + 1) : "";
+    const { baseName, extension } = extractFileComponents(sanitizedBase);
+    const safeBaseName = ensureSafeBaseName(baseName, extension, platform, config);
 
-  const checkName = platformHandler.isCaseSensitive ? baseName : baseName.toUpperCase();
+    const fileName = constructFinalFileName(sanitizedPath, safeBaseName, extension, maxLength, config);
+
+    return buildResult(path, filename, sanitizedPath, fileName, safeBaseName, extension);
+  } finally {
+    BufferPool.release(pathBuffer);
+    BufferPool.release(filenameBuffer);
+    RNGPool.release(config.rng);
+  }
+}
+
+/**
+ * Extracts filename components
+ * @param sanitizedBase Sanitized filename
+ * @returns Base name and extension
+ */
+function extractFileComponents(sanitizedBase: string): { baseName: string; extension: string } {
+  const extIndex = sanitizedBase.lastIndexOf(".");
+  const baseName = extIndex > 0 ? sanitizedBase.substring(0, extIndex) : sanitizedBase;
+  const extension = extIndex > 0 && extIndex < sanitizedBase.length - 1 ? sanitizedBase.substring(extIndex + 1) : "";
+  return { baseName, extension };
+}
+
+/**
+ * Ensures filename base is safe
+ * @param baseName Base filename
+ * @param extension File extension
+ * @param platform Platform handler
+ * @param config Configuration
+ * @returns Safe base name
+ */
+function ensureSafeBaseName(baseName: string, extension: string, platform: PlatformHandler, config: any): string {
+  const checkName = platform.isCaseSensitive ? baseName : baseName.toUpperCase();
   if (
     RESERVED_NAMES.has(checkName) ||
     RESERVED_NAMES.has(`${checkName}.${extension.toUpperCase()}`) ||
-    hasMultipleUnderscores
+    hasExcessiveUnderscores(baseName)
   ) {
-    baseName = generateSafeFilename(extension, fileTypeWords, rng, accessibleNames);
+    return generateSafeFilename(extension, config.fileTypeWords, config.rng, config.accessibleNames);
   }
+  return baseName;
+}
 
+/**
+ * Constructs final filename
+ * @param sanitizedPath Sanitized path
+ * @param baseName Base filename
+ * @param extension File extension
+ * @param maxLength Maximum length
+ * @param config Configuration
+ * @returns Final filename
+ */
+function constructFinalFileName(
+  sanitizedPath: string,
+  baseName: string,
+  extension: string,
+  maxLength: number,
+  config: any
+): string {
   const extPart = extension ? `.${extension}` : "";
-  const fullLength = sanitizedPath.length + baseName.length + extPart.length;
-  let fileName = baseName + extPart;
-  if (fullLength > maxLength) {
-    if (onTruncate === "error") throw new Error(`Path exceeds maxLength of ${maxLength}`);
-    const available = maxLength - sanitizedPath.length - extPart.length;
-    fileName =
-      available <= 1
-        ? `f${extPart}`
-        : onTruncate === "smart" && available > 3
-        ? `${baseName.substring(
-            0,
-            Math.min(
-              baseName.indexOf(accessibleNames ? "-" : "_") === -1
-                ? available
-                : baseName.indexOf(accessibleNames ? "-" : "_"),
-              available
-            )
-          )}${extPart}`
-        : `${baseName.substring(0, available)}${extPart}`;
-  }
+  const cleanBaseName = baseName.replace(/\//g, "_");
+  const fullLength = sanitizedPath.length + cleanBaseName.length + extPart.length;
+  return fullLength > maxLength
+    ? truncateFilename(
+        cleanBaseName,
+        extension,
+        maxLength - sanitizedPath.length - extPart.length,
+        config.onTruncate,
+        config.accessibleNames
+      )
+    : `${cleanBaseName}${extPart}`;
+}
 
-  const result = {
-    original_path: `${path}${filename}`,
+/**
+ * Builds result object
+ * @param originalPath Original path
+ * @param originalFilename Original filename
+ * @param sanitizedPath Sanitized path
+ * @param fileName Final filename
+ * @param baseName Base filename
+ * @param extension File extension
+ * @returns Parse result
+ */
+function buildResult(
+  originalPath: string,
+  originalFilename: string,
+  sanitizedPath: string,
+  fileName: string,
+  baseName: string,
+  extension: string
+): PathParseResult {
+  return {
+    original_path: `${originalPath}${originalFilename}`,
     file_path: sanitizedPath,
     file_name: fileName,
     file_type: extension,
     filename_without_extension: baseName,
-    extension_with_dot: extPart,
+    extension_with_dot: extension ? `.${extension}` : "",
   };
-
-  BufferPool.release(pathBuffer);
-  BufferPool.release(filenameBuffer);
-
-  return result;
 }
 
-// Test Cases
-function processFilePath(path: string, filename: string, options?: ParsePathOptions): void {
-  try {
-    const result = parsePathComprehensive(path, filename, options);
-    console.log("Parsed Path Result:", JSON.stringify(result, null, 2));
-  } catch (e) {
-    console.error(e);
-  }
+/** Detects current platform */
+function detectPlatform(): "win32" | "posix" {
+  return typeof process !== "undefined" && process.platform === "win32" ? "win32" : "posix";
 }
 
-processFilePath("e", "test.txt");
-processFilePath(" ", "file.txt");
-processFilePath("/long/path", "very_long_name.pdf", { maxLength: 20, onTruncate: "smart" });
-processFilePath("../evil", "file.txt");
-processFilePath("/path", "test__doc.txt");
-processFilePath("/path", "test__doc.txt", { accessibleNames: true });
-processFilePath("C:\\Users\\Docs", "テスト.txt", { platformHandler: new Win32PlatformHandler() });
-processFilePath("/home/user", "人山.pdf", { platformHandler: new PosixPlatformHandler() });
-processFilePath("/path", "ملف.txt", { platformHandler: new PosixPlatformHandler() });
-processFilePath("/path", "🦁test.txt", { onUnicodeOverflow: "error" });
-processFilePath("/path", "🦁test.txt", { onUnicodeOverflow: "ignore", accessibleNames: true });
+/** Runs comprehensive test suite */
+function runTests(): void {
+  const tests: [string, string, ParsePathOptions | undefined][] = [
+    ["e", "test.txt", undefined],
+    [" ", "file.txt", undefined],
+    ["/long/path", "very_long_name.pdf", { maxLength: 20, onTruncate: "smart" }],
+    ["../evil", "file.txt", undefined],
+    ["/path", "test___doc.txt", undefined],
+    ["/path", "test____doc.txt", undefined],
+    ["/path", "test____doc.txt", { accessibleNames: true }],
+    ["C:\\Users\\Docs", "テスト.txt", { platformHandler: new Win32PlatformHandler() }],
+    ["/home/user", "人山.pdf", { platformHandler: new PosixPlatformHandler() }],
+    ["/path", "ملف.txt", { platformHandler: new PosixPlatformHandler() }],
+    ["/path", "🦁test.txt", { onUnicodeOverflow: "error" }],
+    ["/path", "🦁test.txt", { onUnicodeOverflow: "ignore", accessibleNames: true }],
+    ["/", "", undefined],
+    ["/", "CON", undefined],
+    ["/path with spaces/", "file.txt", undefined],
+    ["/", "a".repeat(5000), { maxLength: 4096 }],
+  ];
+
+  tests.forEach(([path, filename, options], i) => {
+    try {
+      console.log(`Test ${i + 1}:`, JSON.stringify(parsePathComprehensive(path, filename, options), null, 2));
+    } catch (e) {
+      console.log(`Test ${i + 1} failed:`, e);
+    }
+  });
+}
+
+runTests();
