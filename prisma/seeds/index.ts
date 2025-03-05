@@ -1,9 +1,24 @@
-import { encryptPassword, generateNanoID, generateRandomSalt, generateToken } from "@/utils/functions.ts";
+import { encryptPassword, generateNanoID, generateRandomSalt } from "@/utils/functions.ts";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  const tables_transact =
+    (
+      (await prisma.$transaction([
+        prisma.file_status.count(),
+        prisma.user_status.count(),
+        prisma.user_type.count(),
+        prisma.users.count(),
+      ])) ?? []
+    ).reduce((old, curr) => old + curr, 0) > 0;
+
+  if (tables_transact) {
+    console.info("Migrations could not run due to the data beign already there");
+    return;
+  }
+
   const user_status = await prisma.user_status.createMany({
     data: [{ name: "Active" }, { name: "Password Reset" }, { name: "Deleted" }],
     skipDuplicates: true,

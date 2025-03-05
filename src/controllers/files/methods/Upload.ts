@@ -15,7 +15,7 @@ import { Elysia } from "elysia";
 
 export default new Elysia().decorate("api_key", "" as string).post(
   "upload",
-  async ({ body: { path, file }, set, api_key }) => {
+  async ({ body: { path, file }, api_key }) => {
     try {
       const workingFP = await createFilePathIfDoesntExists(path);
       const createdFile = await createFileOnsFS(workingFP, file);
@@ -26,23 +26,21 @@ export default new Elysia().decorate("api_key", "" as string).post(
       const actualFile = bFile(totalFilePath ?? "");
 
       // Actual File MetaData
-      const contentType = actualFile.type || "application/octet-stream";
-      const fileSize = actualFile.size;
-
-      set.headers["Content-Type"] = contentType;
-      set.headers["Content-length"] = fileSize;
+      const file_size = actualFile.size;
 
       const registerFile = await prisma.metadata.create({
-        select: { file_path: true, file_name: true, file_mime: true, file_size: true },
+        select: { file_path: true, file_name: true, file_mime: true, file_size: true, id: true },
         data: {
           file_name: extractAndSanitizeFileName(actualFile.name ?? ""),
           file_path: extractAndSanitizePath(totalFilePath),
           User: { connect: { api_key } },
           Status: { connect: { id: 1 } },
           file_mime: actualFile.type,
-          file_size: actualFile.size,
+          file_size,
         },
       });
+
+      console.log({ registerFile });
 
       return registerFile;
     } catch (err) {

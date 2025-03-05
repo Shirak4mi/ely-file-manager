@@ -202,6 +202,26 @@ export function sanitizeString(fileOrPath: string): string {
 }
 
 /**
+ * Efficiently checks if path starts with base path
+ *
+ * @param {string} path - Full path to check
+ * @param {string} base - Base path to compare
+ * @returns {boolean} Whether path starts with base
+ */
+export function startsWithBase(path: string, base: string): boolean {
+  // Quick length check first
+  if (path.length < base.length) return false;
+
+  // Manual character-by-character comparison
+  for (let i = 0; i < base.length; i++) {
+    if (path.charCodeAt(i) !== base.charCodeAt(i)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Constructs an OS-specific absolute path by prepending a base path.
  * Optimized for speed: single-pass replacement, minimal string ops, cached platform check.
  * Executes in <5ms for typical path inputs.
@@ -212,6 +232,9 @@ export function sanitizeString(fileOrPath: string): string {
 export function returnActualOSPath(path: string): string {
   const isWin32 = process.platform === "win32"; // Cache platform check
   const base = isWin32 ? "C:" + file_path : file_path; // Precompute base
+
+  if (startsWithBase(path, base)) return path;
+
   const input = base + path; // Single concat
 
   if (!isWin32) return input; // Early exit for Unix
@@ -220,6 +243,52 @@ export function returnActualOSPath(path: string): string {
   let result = "";
   for (let i = 0; i < input.length; i++) {
     const char = input[i];
+    result += char === "/" ? "\\" : char;
+  }
+  
+  return result;
+}
+
+/**
+ * Constructs an OS-specific absolute path by prepending a base path.
+ * Optimized for speed: single-pass replacement, minimal string ops, cached platform check.
+ * Includes validation to prevent duplicate base paths.
+ * Executes in <5ms for typical path inputs.
+ *
+ * @param {string} path - Relative or potentially absolute path to convert
+ * @returns {string} Absolute OS-specific path
+ */
+export function returnActualOSPathss(path: string): string {
+  const isWin32 = process.platform === "win32"; // Cache platform check
+  const base = isWin32 ? "C:" + file_path : file_path; // Precompute base
+
+  console.log({ path, file_path });
+
+  // Quick absolute path check without using includes()
+  // Check if path starts with base or root separator
+  if (startsWithBase(path, base) || path.charAt(0) === "/" || path.charAt(0) === "\\") {
+    return normalizePath(path, isWin32);
+  }
+
+  // Combine base and path
+  const input = base + path;
+  return normalizePath(input, isWin32);
+}
+
+/**
+ * Normalizes path separators based on the OS
+ *
+ * @param {string} path - Path to normalize
+ * @param {boolean} isWin32 - Whether the current platform is Windows
+ * @returns {string} Normalized path with correct separators
+ */
+function normalizePath(path: string, isWin32: boolean): string {
+  if (!isWin32) return path;
+
+  // Fast forward-slash to backslash replacement
+  let result = "";
+  for (let i = 0; i < path.length; i++) {
+    const char = path[i];
     result += char === "/" ? "\\" : char;
   }
   return result;

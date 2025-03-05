@@ -1,11 +1,12 @@
 import { encryptPassword, generateNanoID, generateRandomSalt } from "@/utils/functions";
 import { InternalServerErrorException } from "@/utils/error";
+import { successResponseMiddleware } from "@/middlewares";
 import { CreateUserDTO } from "../dto";
 import { prisma } from "@/db";
 
 import { Elysia } from "elysia";
 
-export default new Elysia().post(
+export default new Elysia().use(successResponseMiddleware).post(
   "Register",
   async ({ body: { username, email, password, type } }) => {
     try {

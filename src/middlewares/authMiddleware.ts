@@ -4,7 +4,9 @@ import { prisma } from "@/db";
 import type { Elysia } from "elysia";
 
 export default function authMiddleware(app: Elysia) {
-  return app.decorate("jwt", {} as { verify: Function }).derive(async ({ request, jwt: { verify } }) => {
+  return app.decorate("jwt", {} as { verify: Function }).derive(async ({ request, jwt: { verify }, path }) => {
+    if (path.includes("/files")) return;
+
     const authHeader = request.headers.get("Authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) throw new UnauthorizedException("No Bearer Token");
     const token = authHeader.split(" ")[1];

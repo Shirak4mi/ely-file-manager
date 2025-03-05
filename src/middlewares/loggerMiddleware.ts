@@ -22,8 +22,6 @@ export default function loggerMiddleware(app: Elysia) {
       const responseData = response ? response : null;
       const requestedData = body ? body : null;
 
-      console.log({ rbTypeof: typeof body });
-
       const logMetadata = {
         requestIpFrom: convertIPv6ToIPv4(server ? server.requestIP.toString() : "N/A"),
         requestUserAgent: headers.get("user-agent"),

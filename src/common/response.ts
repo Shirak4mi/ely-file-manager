@@ -17,3 +17,13 @@ export const ErrorResponseSchema = t.Composite([
 ]);
 
 export type ErrorResponse = Static<typeof ErrorResponseSchema>;
+
+export const SuccessResponseSchema = t.Composite([
+  BaseResponseSchema,
+  t.Object({
+    data: t.Any(),
+    status: t.Union([t.Number(), t.String()]),
+  }),
+]);
+
+export type SuccessResponse = Static<typeof SuccessResponseSchema>;

@@ -1,0 +1,62 @@
+# # Use Docker to execute the pipeline stages
+# image: docker:latest
+
+# # Define services needed by the pipeline
+# services:
+#   - docker:dind
+
+# # Define environment variables
+# variables:
+#   NODE_ENV: production
+#   DOCKER_DRIVER: overlay2
+#   IMAGE_NAME: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+
+# # Stages of the pipeline
+# stages:
+#   - build
+#   - test
+#   - deploy
+
+# # Build Stage
+# build:
+#   stage: build
+#   script:
+#     - echo "Building Docker image..."
+#     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+#     - docker build -t $IMAGE_NAME .
+#     - docker push $IMAGE_NAME
+#   only:
+#     - main  # Runs only on the main branch
+
+# # Test Stage
+# # test:
+# #   stage: test
+# #   script:
+# #     - echo "Running tests..."
+# #     - docker run --rm $IMAGE_NAME npm run test
+# #   only:
+# #     - merge_requests  # Run tests only on merge requests
+# #     - main            # Optionally run tests on the main branch
+
+# deploy:
+#   stage: deploy
+#   environment: production
+#   before_script:
+#     - 'which ssh-agent || ( apk add --update openssh )'  # Install SSH if needed
+#     - eval $(ssh-agent -s)
+#     - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -  # Add SSH key
+#     - mkdir -p ~/.ssh
+#     - chmod 700 ~/.ssh
+#     - ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts  # Add server to known hosts
+#   script:
+#     - |
+#       ssh $SSH_USER@$SSH_HOST <<EOF
+#         docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+#         docker pull $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+#         docker stop my-nest-app || true  # Stop if running
+#         docker rm my-nest-app || true  # Remove container if exists
+#         docker run -d --name my-nest-app -p 3000:3000 $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+#       EOF
+#   only:
+#     - tags
+#   when: manual  # Optional: set to manual if you want to trigger deployment manually

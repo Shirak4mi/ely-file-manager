@@ -1,5 +1,4 @@
 import { UnauthorizedException } from "@/utils/error";
-import { logger } from "@/utils/functions";
 import { loginUserDTO } from "../dto";
 import { prisma } from "@/db";
 
@@ -22,8 +21,6 @@ export default new Elysia().decorate("jwt", {} as { sign: Function }).post(
       if (!isValidPassword) throw new UnauthorizedException("Invalid Credentials");
 
       const token = await sign({ _id, api_key });
-
-      logger("INFO", "User Logged");
 
       return { token };
     } catch (err) {
