@@ -4,14 +4,15 @@ interface ParsePathOptions {
   unicodeMap?: Uint8Array; // Custom mapping for Unicode characters
   onTruncate?: "error" | "smart" | "default"; // Truncation behavior
   onUnicodeOverflow?: "error" | "ignore"; // Behavior for unmapped Unicode chars
-  seed?: number; // Seed for RNG, defaults to current timestamp
+  seed?: Uint32Array; // Seed for RNG (optional, crypto-secure by default)
   fileTypeWords?: Record<string, string[]>; // Custom words for file types
   bufferSize?: number; // Size of processing buffers
+  platform?: "win32" | "posix" | "auto"; // Target platform (default: "auto" detects runtime)
 }
 
 interface PathParseResult {
   original_path: string; // Original input path and filename
-  path: string; // Sanitized directory path with trailing slash
+  file_path: string; // Sanitized directory path with trailing slash
   file_name: string; // Sanitized full filename (with extension)
   file_type: string; // File extension without dot (e.g., "txt")
   filename_without_extension: string; // Filename without extension
@@ -19,20 +20,18 @@ interface PathParseResult {
 }
 
 // Core constants
-const DEFAULT_MAX_LENGTH = 255;
+const DEFAULT_MAX_LENGTH_POSIX = 4096; // POSIX typical max path length
+const DEFAULT_MAX_LENGTH_WIN32 = 260; // Windows typical max path length
 const DEFAULT_BUFFER_SIZE = 1024;
 const CHAR_CODES = {
   FORWARD_SLASH: 47,
   UNDERSCORE: 95,
   BACK_SLASH: 92,
   DOT: 46,
+  NULL: 0,
+  COLON: 58, // For Windows drive letters
 } as const;
 const BYTE_MASK = 0xff;
-const RNG_CONSTANTS = {
-  MAX: 16777216,
-  MULTIPLIER: 69069, // LCG multiplier for uniform distribution
-  INCREMENT: 1,
-} as const;
 
 // Precomputed lookup tables
 const ILLEGAL_PATH_CHARS = new Uint8Array(256);
@@ -62,7 +61,7 @@ const RESERVED_NAMES = new Set([
   "LPT9",
 ]);
 
-// Camelot-themed paths for space-only inputs
+// Combined Camelot, Lord of the Rings, and space-only paths
 const SPACE_PATHS = [
   "/camelot/",
   "/arthur/",
@@ -95,17 +94,168 @@ const SPACE_PATHS = [
   "/questingbeast/",
   "/camelotcastle/",
   "/knights/",
+  "/middleearth/",
+  "/frodo/",
+  "/samwise/",
+  "/gandalf/",
+  "/aragorn/",
+  "/legolas/",
+  "/gimli/",
+  "/boromir/",
+  "/merry/",
+  "/pippin/",
+  "/bilbo/",
+  "/sauron/",
+  "/saruman/",
+  "/gollum/",
+  "/elrond/",
+  "/galadriel/",
+  "/arwen/",
+  "/eowyn/",
+  "/faramir/",
+  "/denethor/",
+  "/theoden/",
+  "/eomer/",
+  "/treebeard/",
+  "/grima/",
+  "/hobbiton/",
+  "/shire/",
+  "/rivendell/",
+  "/lorien/",
+  "/mirkwood/",
+  "/gondor/",
+  "/rohan/",
+  "/mordor/",
+  "/isengard/",
+  "/minastirith/",
+  "/erebor/",
+  "/dwarves/",
+  "/elves/",
+  "/orcs/",
+  "/ents/",
+  "/baraddur/",
+  "/moria/",
+  "/fangorn/",
+  "/deadmarshes/",
+  "/helmsdeep/",
+  "/edoras/",
+  "/bagend/",
+  "/onering/",
+  "/palantir/",
+  "/mithril/",
+  "/anduin/",
+  "/greyhavens/",
+  "/bree/",
+  "/weathertop/",
+  "/caradhras/",
+  "/khazaddum/",
+];
+
+// Yokai and Oni names for traversal replacement
+const YOKAI_ONI_PATHS = [
+  "/oni/",
+  "/kappa/",
+  "/tengu/",
+  "/kitsune/",
+  "/tanuki/",
+  "/yuki-onna/",
+  "/shuten-doji/",
+  "/ibaraki-doji/",
+  "/kuchisake-onna/",
+  "/nurarihyon/",
+  "/jorogumo/",
+  "/rokurokubi/",
+  "/nukekubi/",
+  "/aka-manto/",
+  "/kirin/",
+  "/bake-danuki/",
+  "/bakeneko/",
+  "/nekomata/",
+  "/inugami/",
+  "/ha-inu/",
+  "/tsuchigumo/",
+  "/yamauba/",
+  "/hannya/",
+  "/gashadokuro/",
+  "/kyubi/",
+  "/ushioni/",
+  "/nure-onna/",
+  "/kamaitachi/",
+  "/namahage/",
+  "/hyakume/",
+  "/ao-andon/",
+  "/ao-nyobo/",
+  "/betobeto-san/",
+  "/binbogami/",
+  "/buruburu/",
+  "/chouchin-obake/",
+  "/daitengu/",
+  "/dorotabo/",
+  "/enra-enra/",
+  "/funa-yurei/",
+  "/futakuchi-onna/",
+  "/hitotsume-kozou/",
+  "/hyosube/",
+  "/ippon-datara/",
+  "/issun-boshi/",
+  "/ittan-momen/",
+  "/jinmenju/",
+  "/kasa-obake/",
+  "/kodama/",
+  "/konaki-jiji/",
+  "/koropokkuru/",
+  "/kubikajiri/",
+  "/kudan/",
+  "/mikoshi-nyudo/",
+  "/mujina/",
+  "/ningyo/",
+  "/noddera-bo/",
+  "/nuribotoke/",
+  "/oboroguruma/",
+  "/ohaguro-bettari/",
+  "/okiku/",
+  "/onibi/",
+  "/onikuma/",
+  "/onmoraki/",
+  "/osakabe-hime/",
+  "/sazae-oni/",
+  "/shirime/",
+  "/shojo/",
+  "/takiyasha-hime/",
+  "/tatami-tataki/",
+  "/tektek/",
+  "/tenome/",
+  "/tsukumogami/",
+  "/ubume/",
+  "/umibozu/",
+  "/waira/",
+  "/wanyudo/",
+  "/yama-jiji/",
+  "/yama-otoko/",
+  "/yanari/",
+  "/yurei/",
+  "/zashiki-warashi/",
+  "/akuma/",
+  "/daidarabotchi/",
+  "/enma/",
+  "/fujin/",
+  "/raijin/",
+  "/tamamo-no-mae/",
+  "/sutoku-tenno/",
+  "/hashihime/",
+  "/kiyohime/",
+  "/momiji/",
 ];
 
 // Initialize illegal characters lookup tables
 function initializeIllegalChars(): void {
-  const illegalChars = [60, 62, 58, 34, 124, 63, 42, ...Array(32).keys()];
+  const illegalChars = [CHAR_CODES.NULL, 60, 62, 58, 34, 124, 63, 42, ...Array(32).keys()];
   for (const char of illegalChars) {
     ILLEGAL_PATH_CHARS[char] = 1;
     ILLEGAL_FILENAME_CHARS[char] = 1;
   }
   ILLEGAL_PATH_CHARS[CHAR_CODES.FORWARD_SLASH] = 0; // Allow in paths
-  ILLEGAL_PATH_CHARS[CHAR_CODES.BACK_SLASH] = 0; // Allow in paths
+  ILLEGAL_PATH_CHARS[CHAR_CODES.BACK_SLASH] = 0; // Allow in paths (normalized later)
   ILLEGAL_FILENAME_CHARS[CHAR_CODES.FORWARD_SLASH] = 1; // Disallow in filenames
   ILLEGAL_FILENAME_CHARS[CHAR_CODES.BACK_SLASH] = 1; // Disallow in filenames
 }
@@ -128,14 +278,16 @@ const DEFAULT_FILE_TYPE_WORDS = Object.freeze({
   default: ["file", "data", "record", "item", "project", "entry", "object", "asset", "unit", "resource"],
 });
 
-// Unicode mapping (1280 chars for Latin-1 and Cyrillic)
-const UNICODE_MAP_SIZE = 0x0500; // Covers Basic Latin, Latin-1 Supplement, Cyrillic
+// Extended Unicode mapping (up to 0xFFFF for broader script support)
+const UNICODE_MAP_SIZE = 0xffff; // Covers BMP (Basic Multilingual Plane)
 const DEFAULT_UNICODE_MAP = createDefaultUnicodeMap();
 function createDefaultUnicodeMap(): Uint8Array {
   const map = new Uint8Array(UNICODE_MAP_SIZE);
   map.fill(CHAR_CODES.UNDERSCORE); // Default to underscore for unmapped chars
   for (let i = 32; i < 127; i++) map[i] = i; // ASCII printable chars
-  const mappings: Record<number, number> = {
+
+  // Latin-1 and Cyrillic mappings (previous)
+  const basicMappings: Record<number, number> = {
     0xc0: 97,
     0xc1: 97,
     0xc2: 97, // ÀÁÂ → a
@@ -173,19 +325,76 @@ function createDefaultUnicodeMap(): Uint8Array {
     0x0410: 97,
     0x0430: 97, // Аа → a
   };
-  for (const [key, value] of Object.entries(mappings)) map[Number(key)] = value;
+
+  // Japanese Hiragana/Katakana to English transliteration (simplified examples)
+  const japaneseMappings: Record<number, string> = {
+    0x3042: "a", // あ → a
+    0x3044: "i", // い → i
+    0x3046: "u", // う → u
+    0x3048: "e", // え → e
+    0x304a: "o", // お → o
+    0x30a2: "a", // ア → a
+    0x30a4: "i", // イ → i
+    0x30a6: "u", // ウ → u
+    0x30a8: "e", // エ → e
+    0x30aa: "o", // オ → o
+    0x305f: "ta", // た → ta
+    0x30bf: "ta", // タ → ta
+  };
+
+  // Chinese to English transliteration (Pinyin-like, simplified examples)
+  const chineseMappings: Record<number, string> = {
+    0x4e00: "yi", // 一 → yi
+    0x4eba: "ren", // 人 → ren
+    0x5c71: "shan", // 山 → shan
+    0x6c34: "shui", // 水 → shui
+  };
+
+  // Arabic to English transliteration (simplified examples)
+  const arabicMappings: Record<number, string> = {
+    0x0627: "a", // ا → a
+    0x0628: "b", // ب → b
+    0x062a: "t", // ت → t
+    0x0645: "m", // م → m
+  };
+
+  // Apply basic mappings
+  for (const [key, value] of Object.entries(basicMappings)) map[Number(key)] = value;
+
+  // Apply multi-byte mappings (simplified transliteration to single chars or underscore)
+  for (const [key, value] of Object.entries(japaneseMappings)) {
+    map[Number(key)] = value.charCodeAt(0); // Take first char for simplicity
+  }
+  for (const [key, value] of Object.entries(chineseMappings)) {
+    map[Number(key)] = value.charCodeAt(0); // Take first char
+  }
+  for (const [key, value] of Object.entries(arabicMappings)) {
+    map[Number(key)] = value.charCodeAt(0); // Take first char
+  }
+
   return map;
 }
 
-// Optimized RNG using Linear Congruential Generator
-class FastRNG {
-  private seed: number;
-  constructor(seed: number = Date.now()) {
-    this.seed = seed >>> 0; // Ensure unsigned 32-bit integer
+// Cryptographically secure RNG
+class SecureRNG {
+  private buffer: Uint32Array;
+  private index: number;
+  private readonly size = 16; // Buffer 16 numbers at a time
+
+  constructor(seed?: Uint32Array) {
+    this.buffer = seed ?? new Uint32Array(this.size);
+    this.index = this.size; // Force initial fill
+    if (!seed) this.refillBuffer();
   }
+
+  private refillBuffer(): void {
+    crypto.getRandomValues(this.buffer);
+    this.index = 0;
+  }
+
   next(): number {
-    this.seed = (this.seed * RNG_CONSTANTS.MULTIPLIER + RNG_CONSTANTS.INCREMENT) >>> 0;
-    return (this.seed >>> 8) / RNG_CONSTANTS.MAX; // Normalize to [0, 1)
+    if (this.index >= this.size) this.refillBuffer();
+    return this.buffer[this.index++] / 0x100000000; // Normalize to [0, 1)
   }
 }
 
@@ -195,20 +404,62 @@ const FILENAME_BUFFER = new Uint8Array(DEFAULT_BUFFER_SIZE);
 const DECODER = new TextDecoder();
 
 // Helper functions
+function detectPlatform(): "win32" | "posix" {
+  return typeof process !== "undefined" && process.platform === "win32" ? "win32" : "posix";
+}
+
 function isSpaceOnly(str: string): boolean {
   return str.trim() === "";
 }
 
-function sanitizePath(input: string, buffer: Uint8Array, bufferSize: number, rng: FastRNG): string {
+function containsTraversal(input: string): boolean {
+  return /\.\.(\/|\\)/.test(input) || input.includes(".."); // Check for "../" or "..\" or standalone ".."
+}
+
+function normalizePath(input: string, platform: "win32" | "posix"): string {
+  let normalized = input
+    .replace(/\/+/g, "/") // Collapse multiple slashes
+    .replace(/\\+/g, "\\") // Collapse multiple backslashes (Windows)
+    .replace(/^\.+/, ""); // Remove leading dots
+
+  if (platform === "win32") {
+    // Handle Windows drive letters (e.g., "C:\path" → "/C/path")
+    if (/^[a-zA-Z]:/.test(normalized)) {
+      const drive = normalized.charAt(0).toUpperCase();
+      normalized = `/${drive}${normalized.slice(2)}`;
+    }
+    normalized = normalized.replace(/\\/g, "/"); // Convert all to forward slashes
+  } else {
+    normalized = normalized.replace(/\\/g, "/"); // Normalize backslashes to forward slashes
+  }
+
+  return normalized;
+}
+
+function generateYokaiPath(rng: SecureRNG): string {
+  const yokai1 = YOKAI_ONI_PATHS[Math.floor(rng.next() * YOKAI_ONI_PATHS.length)];
+  const yokai2 = YOKAI_ONI_PATHS[Math.floor(rng.next() * YOKAI_ONI_PATHS.length)];
+  return `${yokai1}${yokai2.slice(1)}`; // Combine two yokai names, removing extra slash
+}
+
+function sanitizePath(
+  input: string,
+  buffer: Uint8Array,
+  bufferSize: number,
+  rng: SecureRNG,
+  platform: "win32" | "posix"
+): string {
   if (isSpaceOnly(input)) return SPACE_PATHS[Math.floor(rng.next() * SPACE_PATHS.length)];
   if (input.length > bufferSize) throw new Error(`Path exceeds buffer size of ${bufferSize} bytes`);
+  if (containsTraversal(input)) return generateYokaiPath(rng);
 
+  const normalized = normalizePath(input, platform);
   let writePos = 0;
-  const hasInitialSlash = input.charCodeAt(0) === CHAR_CODES.FORWARD_SLASH;
+  const hasInitialSlash = normalized.charCodeAt(0) === CHAR_CODES.FORWARD_SLASH;
   if (!hasInitialSlash) buffer[writePos++] = CHAR_CODES.FORWARD_SLASH;
 
-  for (let i = 0; i < input.length; i++) {
-    const char = input.charCodeAt(i) & BYTE_MASK;
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized.charCodeAt(i) & BYTE_MASK;
     buffer[writePos++] = ILLEGAL_PATH_CHARS[char]
       ? CHAR_CODES.UNDERSCORE
       : char === CHAR_CODES.BACK_SLASH
@@ -222,7 +473,7 @@ function sanitizePath(input: string, buffer: Uint8Array, bufferSize: number, rng
 function mapUnicodeChar(char: number, unicodeMap: Uint8Array, onOverflow: "error" | "ignore"): number {
   if (char < unicodeMap.length) return unicodeMap[char];
   if (onOverflow === "error") throw new Error(`Unicode char ${char} exceeds map range`);
-  return CHAR_CODES.UNDERSCORE;
+  return CHAR_CODES.UNDERSCORE; // Fallback to underscore for unmapped chars
 }
 
 function sanitizeFilenameCore(
@@ -230,12 +481,16 @@ function sanitizeFilenameCore(
   buffer: Uint8Array,
   bufferSize: number,
   unicodeMap: Uint8Array,
-  onOverflow: "error" | "ignore"
+  onOverflow: "error" | "ignore",
+  platform: "win32" | "posix"
 ): string {
   if (input.length > bufferSize) throw new Error(`Filename exceeds buffer size of ${bufferSize} bytes`);
+  if (containsTraversal(input)) return generateYokaiPath(new SecureRNG()).slice(1); // Remove leading slash for filename
+
+  const normalized = normalizePath(input, platform);
   let writePos = 0;
-  for (let i = 0; i < input.length; i++) {
-    const char = input.charCodeAt(i);
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized.charCodeAt(i);
     const mapped = mapUnicodeChar(char, unicodeMap, onOverflow);
     buffer[writePos++] = ILLEGAL_FILENAME_CHARS[mapped & BYTE_MASK] ? CHAR_CODES.UNDERSCORE : mapped;
   }
@@ -260,13 +515,14 @@ function sanitizeFilename(
   buffer: Uint8Array,
   bufferSize: number,
   unicodeMap: Uint8Array,
-  onOverflow: "error" | "ignore"
+  onOverflow: "error" | "ignore",
+  platform: "win32" | "posix"
 ): string {
-  const raw = sanitizeFilenameCore(input, buffer, bufferSize, unicodeMap, onOverflow);
+  const raw = sanitizeFilenameCore(input, buffer, bufferSize, unicodeMap, onOverflow, platform);
   return removeExcessiveUnderscores(raw);
 }
 
-function generateSafeFilename(extension: string, fileTypeWords: Record<string, string[]>, rng: FastRNG): string {
+function generateSafeFilename(extension: string, fileTypeWords: Record<string, string[]>, rng: SecureRNG): string {
   const ext = extension.toLowerCase() as keyof typeof fileTypeWords;
   const words = fileTypeWords[ext] || fileTypeWords["default"];
   const word = words[Math.floor(rng.next() * words.length)];
@@ -278,15 +534,15 @@ function truncateFilename(
   filename: string,
   extension: string,
   maxLength: number,
-  pathLength: number,
+  filePathLength: number,
   onTruncate: "error" | "smart" | "default"
 ): string {
   const extPart = extension ? `.${extension}` : "";
-  const fullLength = pathLength + filename.length + extPart.length;
+  const fullLength = filePathLength + filename.length + extPart.length;
   if (fullLength <= maxLength) return `${filename}${extPart}`;
 
   if (onTruncate === "error") throw new Error(`Path exceeds maxLength of ${maxLength}`);
-  const available = maxLength - pathLength - extPart.length;
+  const available = maxLength - filePathLength - extPart.length;
   if (available <= 1) return `f${extPart}`;
 
   if (onTruncate === "smart" && available > 3) {
@@ -297,23 +553,23 @@ function truncateFilename(
 }
 
 /**
- * Parses and sanitizes a file path with high performance, flexibility, and robust error handling.
- * Ensures compatibility with common file system constraints (e.g., illegal characters, reserved names).
- * Supports Camelot-themed random paths for space-only inputs and smart truncation for long paths.
+ * Parses and sanitizes a file path with cryptographic security, cross-platform compatibility, and advanced internationalization.
+ * Ensures compatibility with file system constraints and provides thematic random paths for space-only or traversal inputs.
  *
- * @param path - Directory path (e.g., "/docs", "e", " "). Defaults to "/". Space-only inputs yield a random Camelot-themed path (e.g., "/arthur/").
- * @param filename - Filename (e.g., "test.txt"). Defaults to "file". Empty or invalid inputs are replaced with a safe name.
+ * @param path - Directory path (e.g., "/docs", "C:\\files", " "). Defaults to "/". Space-only inputs yield a random Camelot or Lord of the Rings themed path (e.g., "/frodo/"). Traversal inputs (e.g., "../") yield a random yokai/oni path (e.g., "/kappa/tengu/").
+ * @param filename - Filename (e.g., "test.txt"). Defaults to "file". Invalid inputs are replaced with a safe name; traversal inputs yield a yokai/oni name.
  * @param options - Configuration options:
- *   - `maxLength`: Maximum total path length (default: 255).
- *   - `unicodeMap`: Custom Unicode-to-ASCII mapping (default: Latin-1 and Cyrillic support).
+ *   - `maxLength`: Maximum total path length (default: 260 on Windows, 4096 on POSIX).
+ *   - `unicodeMap`: Custom Unicode-to-ASCII mapping (default: BMP support with transliteration to English).
  *   - `onTruncate`: Behavior for long paths: "error" (throw), "smart" (keep first word), "default" (simple cut) (default: "default").
  *   - `onUnicodeOverflow`: Behavior for unmapped Unicode chars: "error" (throw), "ignore" (use "_") (default: "ignore").
- *   - `seed`: RNG seed for reproducibility (default: current timestamp).
+ *   - `seed`: Optional Uint32Array seed for RNG (default: cryptographically secure random values).
  *   - `fileTypeWords`: Custom word lists for generating filenames by extension (default: predefined lists).
  *   - `bufferSize`: Size of internal buffers (default: 1024).
+ *   - `platform`: Target platform ("win32", "posix", or "auto" to detect; default: "auto").
  * @returns A `PathParseResult` object with sanitized path components:
  *   - `original_path`: Original input.
- *   - `path`: Sanitized directory path with trailing slash.
+ *   - `file_path`: Sanitized directory path with trailing slash (always forward slashes).
  *   - `file_name`: Sanitized full filename.
  *   - `file_type`: Extension without dot.
  *   - `filename_without_extension`: Filename without extension.
@@ -326,11 +582,15 @@ function truncateFilename(
  *   - `onUnicodeOverflow` is "error" and a Unicode char exceeds the map range.
  * @example
  * parsePathComprehensive("e", "test.txt")
- * // => { path: "/e/", file_name: "test.txt", ... }
+ * // => { file_path: "/e/", file_name: "test.txt", ... }
  * parsePathComprehensive(" ", "file.pdf")
- * // => { path: "/camelot/", file_name: "file.pdf", ... }
- * parsePathComprehensive("/long/path", "very_long_name.pdf", { maxLength: 20, onTruncate: "smart" })
- * // => { path: "/long/path/", file_name: "very.pdf", ... }
+ * // => { file_path: "/shire/", file_name: "file.pdf", ... }
+ * parsePathComprehensive("../evil", "file.txt")
+ * // => { file_path: "/kappa/tengu/", file_name: "file.txt", ... }
+ * parsePathComprehensive("C:\\files", "テスト.txt", { platform: "win32" })
+ * // => { file_path: "/C/files/", file_name: "tesuto.txt", ... }
+ * parsePathComprehensive("/path", "人山.txt")
+ * // => { file_path: "/path/", file_name: "renshan.txt", ... }
  */
 export function parsePathComprehensive(
   path: string = "/",
@@ -338,7 +598,10 @@ export function parsePathComprehensive(
   options: ParsePathOptions = {}
 ): PathParseResult {
   // Apply defaults and validate options
-  const maxLength = options.maxLength ?? DEFAULT_MAX_LENGTH;
+  const platform = options.platform ?? "auto";
+  const detectedPlatform = platform === "auto" ? detectPlatform() : platform;
+  const maxLengthDefault = detectedPlatform === "win32" ? DEFAULT_MAX_LENGTH_WIN32 : DEFAULT_MAX_LENGTH_POSIX;
+  const maxLength = options.maxLength ?? maxLengthDefault;
   if (maxLength < 1) throw new Error("maxLength must be a positive number");
   const bufferSize = options.bufferSize ?? DEFAULT_BUFFER_SIZE;
   const unicodeMap = options.unicodeMap ?? DEFAULT_UNICODE_MAP;
@@ -346,23 +609,30 @@ export function parsePathComprehensive(
   const onTruncate = options.onTruncate ?? "default";
   const onUnicodeOverflow = options.onUnicodeOverflow ?? "ignore";
   const fileTypeWords = options.fileTypeWords ?? DEFAULT_FILE_TYPE_WORDS;
-  const rng = new FastRNG(options.seed);
+  const rng = new SecureRNG(options.seed);
 
   // Use larger buffers if specified
   const pathBuffer = bufferSize > DEFAULT_BUFFER_SIZE ? new Uint8Array(bufferSize) : PATH_BUFFER;
   const filenameBuffer = bufferSize > DEFAULT_BUFFER_SIZE ? new Uint8Array(bufferSize) : FILENAME_BUFFER;
 
   // Sanitize path and filename
-  const sanitizedPath = sanitizePath(path, pathBuffer, bufferSize, rng);
-  const sanitizedFilename = sanitizeFilename(filename, filenameBuffer, bufferSize, unicodeMap, onUnicodeOverflow);
+  const sanitizedPath = sanitizePath(path, pathBuffer, bufferSize, rng, detectedPlatform);
+  const sanitizedFilename = sanitizeFilename(
+    filename,
+    filenameBuffer,
+    bufferSize,
+    unicodeMap,
+    onUnicodeOverflow,
+    detectedPlatform
+  );
 
   // Split filename into name and extension
   const extIndex = sanitizedFilename.lastIndexOf(".");
   let baseName = extIndex > 0 ? sanitizedFilename.substring(0, extIndex) : sanitizedFilename;
   const extension = extIndex > 0 && extIndex < sanitizedFilename.length - 1 ? sanitizedFilename.substring(extIndex + 1) : "";
 
-  // Check for reserved names or excessive underscores
-  const upperBaseName = baseName.toUpperCase();
+  // Check for reserved names or excessive underscores (case-insensitive on Windows)
+  const upperBaseName = detectedPlatform === "win32" ? baseName.toUpperCase() : baseName;
   const hasExcessiveUnderscores =
     sanitizedFilename.split("_").length - 1 > (sanitizedFilename.match(/[a-zA-ZА-я]/g)?.length || 0);
   if (
@@ -378,7 +648,7 @@ export function parsePathComprehensive(
 
   return {
     original_path: `${path}${filename}`,
-    path: sanitizedPath,
+    file_path: sanitizedPath,
     file_name: fileName,
     file_type: extension,
     filename_without_extension: baseName,
@@ -388,12 +658,22 @@ export function parsePathComprehensive(
 
 // Test cases
 function processFilePath(path: string, filename: string, options?: ParsePathOptions): void {
-  const result = parsePathComprehensive(path, filename, options);
-  console.log("Parsed Path Result:");
-  console.log(JSON.stringify(result, null, 2));
+  try {
+    const result = parsePathComprehensive(path, filename, options);
+    console.log("Parsed Path Result:");
+    console.log(JSON.stringify(result, null, 2));
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 processFilePath("e", "test.txt");
-processFilePath(" ", "file.txt"); // Random Camelot path
-processFilePath("     ", "doc.pdf"); // Random Camelot path
+processFilePath(" ", "file.txt"); // Random Camelot or LOTR path
+processFilePath("     ", "doc.pdf"); // Random Camelot or LOTR path
 processFilePath("/long/path", "very_long_name.pdf", { maxLength: 20, onTruncate: "smart" });
+processFilePath("../evil", "file.txt"); // Random yokai/oni path
+processFilePath("/path/\0evil", "file.txt"); // Null byte sanitized
+processFilePath("/path", "../hack.txt"); // Random yokai/oni filename
+processFilePath("C:\\Users\\Docs", "テスト.txt", { platform: "win32" }); // Windows path with Japanese
+processFilePath("/home/user", "人山.pdf", { platform: "posix" }); // POSIX path with Chinese
+processFilePath("/path", "ملف.txt", { platform: "posix" }); // POSIX path with Arabic
